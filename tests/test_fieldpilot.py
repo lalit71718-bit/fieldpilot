@@ -1,0 +1,117 @@
+"""Run: pytest -q   (no API keys needed: the LLM is faked)."""
+import json
+import os
+import tempfile
+from types import SimpleNamespace as NS
+
+os.environ["FIELDPILOT_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
+os.environ["LLM_API_KEY"] = "test"
+os.environ["BRAIN_API_KEY"] = "secret"
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from backend import brain, config, db, rag, tools  # noqa: E402
+from backend.main import app  # noqa: E402
+
+config.LLM_API_KEY = "test"
+config.BRAIN_API_KEY = "secret"
+
+
+@pytest.fixture(autouse=True)
+def fresh():
+    db.reset_db()
+
+
+def test_rag_finds_e4_procedure():
+    hits = rag.search("chiller error E4 high pressure what to check")
+    assert hits and "E4" in hits[0]["text"]
+
+
+def test_inventory_and_confirmed_order_flow():
+    inv = tools.call("check_inventory", {"part": "fan capacitor"})["parts"][0]
+    assert inv["nearest_has_stock"] is False and inv["best_option"]["warehouse"] == "HSR Layout"
+    bad = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "Whitefield"})
+    assert "alternatives" in bad
+    p = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
+    assert p["status"] == "awaiting_confirmation"
+    assert db.q("SELECT * FROM orders") == []  # nothing happens before the yes
+    done = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert done["status"] == "done"
+    assert db.one("SELECT qty FROM stock WHERE sku='CAP-45' AND warehouse='HSR Layout'")["qty"] == 1
+    assert db.one("SELECT status FROM tickets WHERE id='TK-1042'")["status"] == "waiting_for_parts"
+    again = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert "error" in again
+
+
+def test_resolve_needs_confirmation_and_cancel():
+    p = tools.call("update_ticket", {"ticket_id": "TK-1043", "status": "resolved", "note": "topped up"})
+    assert p["status"] == "awaiting_confirmation"
+    tools.call("confirm_action", {"action_id": p["action_id"], "approved": False})
+    assert db.one("SELECT status FROM tickets WHERE id='TK-1043'")["status"] == "open"
+
+
+def test_bad_tool_args_do_not_crash():
+    assert "error" in tools.call("get_ticket", {"nope": 1})
+    assert "error" in tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "tomorrow", "purpose": "x"})
+
+
+# ---------------------------------------------------------------- brain with a fake LLM
+
+def _chunk(content=None, tool=None):
+    tcs = None
+    if tool:
+        tcs = [NS(index=0, id="call_1", function=NS(name=tool[0], arguments=json.dumps(tool[1])))]
+    return NS(choices=[NS(delta=NS(content=content, tool_calls=tcs))])
+
+
+class FakeLLM:
+    """Round 1: asks for check_inventory. Round 2: answers using the tool result."""
+    def __init__(self):
+        self.calls = []
+        self.chat = NS(completions=NS(create=self.create))
+
+    async def create(self, **kw):
+        self.calls.append(kw["messages"])
+        tool_msgs = [m for m in kw["messages"] if m.get("role") == "tool"]
+
+        async def gen():
+            if not tool_msgs:
+                yield _chunk(tool=("check_inventory", {"part": "CAP-45"}))
+            else:
+                yield _chunk("HSR Layout has two. ")
+                yield _chunk("Shall I order one?")
+        return gen()
+
+
+def test_chat_completions_streams_sse_with_tools(monkeypatch):
+    fake = FakeLLM()
+    monkeypatch.setattr(brain, "_client", lambda: fake)
+    c = TestClient(app)
+    body = {"model": "x", "stream": True, "messages": [
+        {"role": "system", "content": "agora default prompt"},
+        {"role": "user", "content": "Do we have the fan capacitor?"}]}
+    assert c.post("/chat/completions", json=body).status_code == 401
+    r = c.post("/chat/completions", json=body, headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    lines = [l[6:] for l in r.text.splitlines() if l.startswith("data: ")]
+    assert lines[-1] == "[DONE]"
+    text = "".join(json.loads(l)["choices"][0]["delta"].get("content", "") for l in lines[:-1])
+    assert text == "One sec, checking stock. HSR Layout has two. Shall I order one?"
+    # our system prompt + live context replaced Agora's, and the tool result went back to the LLM
+    first = fake.calls[0]
+    assert first[0]["content"].startswith("You are FieldPilot")
+    assert all(m["content"] != "agora default prompt" for m in first)
+    assert any(m.get("role") == "tool" and "HSR Layout" in m["content"] for m in fake.calls[1])
+    kinds = [a["kind"] for a in db.q("SELECT kind FROM activity")]
+    assert "user" in kinds and "agent" in kinds and "inventory" in kinds
+
+
+def test_state_and_text_chat(monkeypatch):
+    monkeypatch.setattr(brain, "_client", lambda: FakeLLM())
+    c = TestClient(app)
+    r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
+    assert r.json()["reply"].endswith("Shall I order one?")
+    s = c.get("/api/state").json()
+    assert {"tickets", "stock", "orders", "pending", "activity"} <= s.keys()
+    assert c.get("/").status_code == 200
