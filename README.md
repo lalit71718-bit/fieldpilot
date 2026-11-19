@@ -76,6 +76,13 @@ with [Agora's Murf page](https://docs.agora.io/en/ai/models/tts/murf) and
 
 If the agent fails to start, the Agora error appears in the call panel and in the activity feed.
 
+## LLM choice and rate limits (important for demo day)
+Tested end to end with Groq `openai/gpt-oss-120b`: each voice turn takes about 1.3 to 2.7 s
+including tool calls. **Groq's free tier allows only about 8k tokens per minute per model**, and
+one voice turn can use 2 to 4 model calls. The brain therefore switches to `LLM_FALLBACK_MODELS`
+immediately when a model is rate-limited. For the live demo, use a paid key (Groq Dev Tier, or
+OpenAI `gpt-4o-mini`, about $1 for the whole hackathon) so the judges never hit a limit.
+
 ## MCP
 ```bash
 mcp dev backend/mcp_server.py          # inspect and call the tools in MCP Inspector

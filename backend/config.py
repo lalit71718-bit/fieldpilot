@@ -15,6 +15,8 @@ def env(name: str, default: str = "") -> str:
 LLM_BASE_URL = env("LLM_BASE_URL", "https://api.openai.com/v1")
 LLM_API_KEY = env("LLM_API_KEY")
 LLM_MODEL = env("LLM_MODEL", "gpt-4o-mini")
+# Comma-separated models tried in order when the main one is rate-limited (same provider).
+LLM_FALLBACK_MODELS = [m.strip() for m in env("LLM_FALLBACK_MODELS").split(",") if m.strip()]
 
 AGORA_APP_ID = env("AGORA_APP_ID")
 AGORA_APP_CERTIFICATE = env("AGORA_APP_CERTIFICATE")
@@ -27,7 +29,7 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL").rstrip("/")
 BRAIN_API_KEY = env("BRAIN_API_KEY", "change-me")
 
 MURF_API_KEY = env("MURF_API_KEY")
-MURF_VOICE_ID = env("MURF_VOICE_ID", "en-US-natalie")
+MURF_VOICE_ID = env("MURF_VOICE_ID", "Matthew")
 MURF_LOCALE = env("MURF_LOCALE", "en-US")
 MURF_MODEL = env("MURF_MODEL", "FALCON")
 AGORA_TTS_PARAMS_JSON = env("AGORA_TTS_PARAMS_JSON")

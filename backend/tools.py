@@ -91,6 +91,16 @@ def check_inventory(part: str) -> dict:
 # ---------------------------------------------------------------- action tools (Execute)
 
 def _pending(kind: str, payload: dict, summary: str) -> dict:
+    # Re-asking for the same action reuses the open request instead of creating a duplicate.
+    same = db.one("SELECT id FROM pending_actions WHERE kind=? AND payload=? "
+                  "AND status='awaiting_confirmation'", (kind, json.dumps(payload)))
+    if same:
+        return {"status": "awaiting_confirmation", "action_id": same["id"], "summary": summary,
+                "instruction": "Already prepared. If the technician has agreed, call "
+                               "confirm_action now with this action_id."}
+    # A new request of the same kind replaces older unanswered ones.
+    db.run("UPDATE pending_actions SET status='superseded' WHERE kind=? "
+           "AND status='awaiting_confirmation'", (kind,))
     action_id = "ACT-" + uuid.uuid4().hex[:5].upper()
     db.run("INSERT INTO pending_actions VALUES (?,?,?,?,?,?)",
            (action_id, kind, json.dumps(payload), summary, "awaiting_confirmation",
@@ -118,11 +128,13 @@ def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1) -
                 "alternatives": alts}
     eta = db.now() + timedelta(hours=s["eta_hours"])
     total = p["unit_price"] * qty
-    summary = (f"Order {qty} x {p['name']} ({p['sku']}) from {s['warehouse']} for ticket "
-               f"{t['id']}, total Rs {total}, delivery by {eta.strftime('%a %d %b %I:%M %p')}.")
+    summary = (f"Order {qty} {p['name'].split(' ' + p['name'].split()[-2])[0].lower()} "
+               f"from {s['warehouse']}, {total:,} rupees, arriving "
+               f"{eta.strftime('%A at %-I:%M %p').replace(':00', '')}.")
     return _pending("order_part", {"ticket_id": t["id"], "sku": p["sku"],
                                    "warehouse": s["warehouse"], "qty": qty,
-                                   "total": total, "eta": db.iso(eta)}, summary)
+                                   "total": total, "eta": db.iso(eta.replace(second=0))},
+                    summary)
 
 
 def update_ticket(ticket_id: str, status: str = "", note: str = "") -> dict:

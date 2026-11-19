@@ -8,17 +8,19 @@ Agora Conversational AI sends every user turn here in OpenAI Chat Completions fo
 
 While tools run we immediately stream a short filler ("One sec, checking stock.") so the
 technician never hears dead air."""
+import asyncio
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI, RateLimitError
 
 from . import config, db, tools
 
 MAX_TOOL_ROUNDS = 6
-MAX_HISTORY = 24
+MAX_HISTORY = 16
 
 SYSTEM_PROMPT = """You are FieldPilot, a hands-free voice copilot for field service technicians.
 The technician is on site, hands busy, talking to you through a headset. Everything you write is
@@ -42,16 +44,63 @@ HOW YOU WORK
 - Critical actions (orders, resolving tickets) return status awaiting_confirmation. Read the
   summary and ask a clear yes/no question. Only after the technician clearly agrees call
   confirm_action with approved=true. If they say no or change their mind, approved=false.
-- After real actions, keep systems in sync: add a ticket note, and when the visit is wrapping up
-  offer to generate the service report, notify the supervisor and book the follow-up visit.
+  If LIVE CONTEXT shows a pending confirmation and the technician says yes / go ahead / order
+  it, call confirm_action with that id directly. Do not prepare the same action again.
+- After real actions, keep systems in sync with a short ticket note.
+- WRAP-UP: when the technician is finishing, do all that apply, each with its own tool call:
+  schedule_followup (if a revisit time is mentioned or a part is on order),
+  generate_service_report, notify_supervisor (one-line status). Then recap in one sentence.
 - If a tool returns an error, explain it briefly and propose the next best option.
+- Never say something was done (ordered, updated, sent, notified, booked) unless a tool
+  returned success for it in this conversation. If the technician asks for several actions,
+  call a tool for each one.
+- When you call tools, do not also write an answer in the same message; answer after the
+  results arrive. Use plain words only: write "microfarad", "degrees", "rupees", no symbols.
 - Safety risk, customer escalation or something beyond the technician's skill: offer to escalate
   with notify_supervisor urgent=true.
 - When the work is done, give a one-sentence recap of what was updated."""
 
 
 def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(base_url=config.LLM_BASE_URL, api_key=config.LLM_API_KEY or "missing")
+    # No silent SDK retries: on a rate limit we switch model instantly instead of waiting.
+    return AsyncOpenAI(base_url=config.LLM_BASE_URL, api_key=config.LLM_API_KEY or "missing",
+                       max_retries=0, timeout=20)
+
+
+def _models() -> list[str]:
+    return [config.LLM_MODEL] + [m for m in config.LLM_FALLBACK_MODELS if m != config.LLM_MODEL]
+
+
+async def _create(client, messages):
+    """Call the first model that is not rate-limited (free tiers have small per-model limits)."""
+    last: Exception | None = None
+    for attempt in range(2):
+        for model in _models():
+            try:
+                return await client.chat.completions.create(
+                    model=model, messages=messages, tools=tools.openai_tools(),
+                    tool_choice="auto", temperature=0.3, max_tokens=500, stream=True)
+            except RateLimitError as e:
+                last = e
+                db.log("system", f"{model} rate-limited, trying next model")
+            except APIStatusError as e:
+                if e.status_code not in (404, 503):
+                    raise
+                last = e
+        if attempt == 0:
+            await asyncio.sleep(4)  # every model throttled: wait once for the per-minute window
+    raise last or RuntimeError("No LLM model available")
+
+
+_SPOKEN = [(re.compile(p), r) for p, r in [
+    (r"\s?[µμ]F", " microfarad"), (r"[µμ]", " micro"), (r"\s?°\s?C", " degrees"), (r"₹\s?", "rupees "),
+    (r"[‐‑‒–—]", "-"), (r"[*#`_]+", ""), (r"\s+-\s+", ", ")]]
+
+
+def speakable(text: str) -> str:
+    for pat, rep in _SPOKEN:
+        text = pat.sub(rep, text)
+    return text
 
 
 def live_context() -> str:
@@ -113,9 +162,7 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
     said_filler = False
     spoken: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
-        stream = await client.chat.completions.create(
-            model=config.LLM_MODEL, messages=messages, tools=tools.openai_tools(),
-            tool_choice="auto", temperature=0.3, stream=True)
+        stream = await _create(client, messages)
         content, calls = "", {}
         async for chunk in stream:
             if not chunk.choices:
@@ -123,8 +170,9 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
             d = chunk.choices[0].delta
             if d.content:
                 content += d.content
-                spoken.append(d.content)
-                yield d.content
+                piece = speakable(d.content)
+                spoken.append(piece)
+                yield piece
             for tc in d.tool_calls or []:
                 slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
                 slot["id"] = tc.id or slot["id"]

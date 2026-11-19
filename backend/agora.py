@@ -4,7 +4,7 @@ The agent joins the same RTC channel as the technician's browser. Agora handles 
 turn-taking and interruptions, calls OUR /chat/completions as its LLM, and speaks the reply with
 Murf Falcon TTS.
 
-Field names follow Agora's Conversational AI v2 REST API. If the docs differ for your account,
+Field names follow Agora's Conversational AI v2 REST API docs (join + Murf TTS). If anything differs,
 override any part of the request with AGORA_JOIN_OVERRIDES_JSON (deep-merged) or the Murf block
 with AGORA_TTS_PARAMS_JSON - no code change needed."""
 import base64
@@ -44,8 +44,11 @@ def murf_tts() -> dict:
     if config.AGORA_TTS_PARAMS_JSON:
         params = json.loads(config.AGORA_TTS_PARAMS_JSON)
     else:
-        params = {"api_key": config.MURF_API_KEY, "voice_id": config.MURF_VOICE_ID,
-                  "model": config.MURF_MODEL, "locale": config.MURF_LOCALE}
+        # Field names from docs.agora.io/en/ai/models/tts/murf (REST API sample).
+        params = {"api_key": config.MURF_API_KEY,
+                  "base_url": "wss://global.api.murf.ai/v1/speech/stream-input",
+                  "voiceId": config.MURF_VOICE_ID, "locale": config.MURF_LOCALE,
+                  "rate": 0, "pitch": 0, "model": config.MURF_MODEL, "sample_rate": 24000}
     return {"vendor": "murf", "params": params}
 
 
@@ -67,7 +70,6 @@ def join_body(channel: str) -> dict:
             "agent_rtc_uid": str(AGENT_UID),
             "remote_rtc_uids": [str(USER_UID)],
             "idle_timeout": 180,
-            "advanced_features": {"enable_aivad": True},
             "asr": {"language": config.AGORA_ASR_LANGUAGE},
             "llm": {
                 "url": f"{config.PUBLIC_BASE_URL}/chat/completions",
