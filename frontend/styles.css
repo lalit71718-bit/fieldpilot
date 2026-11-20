@@ -88,3 +88,9 @@ td.zero{color:var(--bad)} td.flash{animation:flash 1.5s}
 tr.new-row td{color:var(--accent);font-weight:600}
 .tag.k-booking,.tag.k-calendar,.tag.k-shopping,.tag.k-task,.tag.k-reminder,.tag.k-notify{color:var(--ok)}
 .tag.k-call{color:var(--accent)}
+
+.alarm{position:fixed;inset:0;background:rgba(5,8,12,.72);display:flex;align-items:center;justify-content:center;z-index:50}
+.alarm-box{background:var(--panel);border:2px solid var(--accent);border-radius:20px;padding:28px 32px;max-width:440px;width:calc(100% - 32px);text-align:center;display:flex;flex-direction:column;gap:14px;animation:pulse 1.6s infinite}
+.alarm-icon{font-size:48px}
+.alarm-text{font-size:22px;font-weight:700}
+.tag.k-alarm{color:var(--accent)}

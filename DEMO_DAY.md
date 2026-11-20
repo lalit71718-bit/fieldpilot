@@ -27,7 +27,8 @@ Or use the Render link (open it a minute early so it wakes up).
 6. "Remind Dadi to take her BP tablet at 8 PM."
 7. "Kabir already took out the recycling." → the chore gets a green tick.
 8. "That's all. Send the family an update." → summary on Slack.
-9. (Wow) "Get Rohan on this call." → open the Slack link on your phone → **Join call** → talk from the phone.
+9. (Proactive) "Remind me in one minute to call the plumber." → a minute later HomePilot says it out loud and the dashboard pops up with a chime.
+10. (Wow) "Get Rohan on this call." → open the Slack link on your phone → **Join call** → talk from the phone.
 
 Say each sentence in one go, then wait for the answer.
 

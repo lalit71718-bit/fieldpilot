@@ -9,8 +9,10 @@
   POST /api/reset          reseed demo data
   GET  /                   web app
 """
+import asyncio
 import random
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -18,7 +20,26 @@ from fastapi.staticfiles import StaticFiles
 
 from . import agora, brain, config, db, tools
 
-app = FastAPI(title="HomePilot")
+async def _reminder_clock():
+    """Every 10 s: fire due reminders. They show on the dashboard, go to the family channel,
+    and HomePilot says them out loud in the live call (Agora speak API)."""
+    while True:
+        try:
+            for r in tools.due_reminders():
+                await agora.speak(r["spoken"])
+        except Exception as e:  # never let the clock die
+            db.log("error", "Reminder clock", str(e)[:200])
+        await asyncio.sleep(10)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    task = asyncio.create_task(_reminder_clock())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="HomePilot", lifespan=lifespan)
 
 
 def _check_key(authorization: str | None) -> None:
@@ -93,6 +114,7 @@ def state():
                         (active,)) if active else [],
         "bookings": db.q("SELECT * FROM bookings ORDER BY created_at DESC"),
         "reminders": db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at"),
+        "fired": db.q("SELECT * FROM activity WHERE kind='alarm' ORDER BY id DESC LIMIT 5"),
         "pending": db.q("SELECT * FROM pending_actions WHERE status='awaiting_confirmation'"),
         "notifications": db.q("SELECT * FROM notifications ORDER BY id DESC LIMIT 10"),
         "activity": db.q("SELECT * FROM activity WHERE kind NOT IN ('tool','llm') "

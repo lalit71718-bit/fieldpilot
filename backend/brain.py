@@ -10,6 +10,7 @@ While tools run we immediately stream a short filler ("One sec, checking stock."
 technician never hears dead air."""
 import asyncio
 import json
+from datetime import datetime
 import re
 import time
 import uuid
@@ -50,6 +51,14 @@ ACTIONS
   complete_task. Medicine or other nudges: set_reminder (only a time the user said; ask if
   not). Calendar: add_event. "Get Rohan on the call": call_family_member.
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
+- Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
+  are spoken in this call and posted to the family channel (not phone alarms). If the user
+  is unclear about AM or PM, ask. Never compute durations yourself: use "rings_in".
+- WHAT HOMEPILOT IS (use these facts, never invent others): a voice assistant with a live
+  dashboard that is view-only. Everything is done by asking you: to delete an alarm the user
+  just says "cancel the 10:50 alarm". When a reminder is due, the dashboard shows a pop-up
+  with a chime, you say it out loud in the call, and it is posted to the family channel.
+  There is no separate app, swipe or delete button. Never invent screens or features.
 - Tool error: say it briefly and offer the next best option."""
 
 
@@ -209,6 +218,11 @@ def live_context() -> str:
     for p in db.q("SELECT id, summary FROM pending_actions WHERE status='awaiting_confirmation' "
                   "ORDER BY created_at DESC LIMIT 3"):
         lines.append(f"Pending confirmation {p['id']}: {p['summary']}")
+    for r in db.q("SELECT text, member, remind_at FROM reminders WHERE status='scheduled' "
+                  "ORDER BY remind_at LIMIT 5"):
+        d = datetime.fromisoformat(r["remind_at"])
+        lines.append(f"Scheduled reminder for {r['member']}: {r['text']} at "
+                     f"{d.strftime('%I:%M %p').lstrip('0')} ({tools._until(d)} from now).")
     for b in db.q("SELECT id, provider, slot_at FROM bookings WHERE status='booked'"):
         lines.append(f"Booked {b['id']}: {b['provider']} at {b['slot_at']}.")
     return "\n".join(lines)
@@ -253,6 +267,7 @@ FILLERS = {
     "assign_task": "Sending that over.",
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",
+    "cancel_reminder": "Cancelling that.",
     "send_family_update": "Messaging the family.",
     "daily_summary": "Sending the family a summary.",
     "call_family_member": "Calling them into this call.",

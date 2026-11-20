@@ -17,6 +17,29 @@ const fmtTime = (ts) => {
   return `${day} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 };
 let remoteUsers = new Set();
+let lastAlarmId = null;  // newest alarm already shown
+
+// Short chime with Web Audio (no sound file needed).
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [880, 660, 880].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i * 0.35;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.start(t); o.stop(t + 0.32);
+    });
+  } catch (e) { /* audio blocked until the user has clicked something */ }
+}
+function showAlarm(a) {
+  $("alarm-text").textContent = `${a.title}: ${a.detail}`;
+  $("alarm").classList.remove("hidden");
+  chime();
+  // Without a live call, the browser speaks it too.
+  if (!live && "speechSynthesis" in window) speechSynthesis.speak(new SpeechSynthesisUtterance(`${a.title}. ${a.detail}`));
+}
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -108,6 +131,8 @@ $("text-form").onsubmit = async (ev) => {
   refresh();
 };
 
+$("alarm-ok").onclick = () => $("alarm").classList.add("hidden");
+
 $("reset").onclick = async () => {
   if (!confirm("Reset all demo data (calendar, tasks, shopping, bookings)?")) return;
   textHistory.length = 0; await api("/api/reset", { method: "POST" }); refresh();
@@ -178,6 +203,13 @@ function render(s) {
   $("kpi-actions").textContent = s.activity.filter((x) => ACTION_KINDS.includes(x.kind)).length;
   $("kpi-shop").textContent = s.shopping.length;
   $("saved").textContent = s.activity.reduce((m, x) => m + (MINUTES[x.kind] || 0), 0);
+
+  // Alarms that fired since the page loaded.
+  const newest = s.fired[0];
+  if (newest) {
+    if (lastAlarmId === null) lastAlarmId = newest.id;           // don't replay old ones on load
+    else if (newest.id !== lastAlarmId) { lastAlarmId = newest.id; showAlarm(newest); }
+  } else if (lastAlarmId === null) lastAlarmId = 0;
 
   // Family member on the live call.
   const chip = $("chip-expert");

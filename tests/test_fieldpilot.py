@@ -303,3 +303,29 @@ def test_spoken_time_and_speech_cleanup():
     d = datetime.now().replace(hour=15, minute=5) + timedelta(days=3)
     assert tools._spoken_time(d).endswith("at 3:05 PM")
     assert brain.speakable("rated 45/5 uF") == "rated 45 by 5 microfarad"
+
+
+def test_alarms_set_dedupe_cancel_and_fire():
+    from datetime import timedelta
+    from backend import agora
+    t = (db.now() + timedelta(hours=1, minutes=5)).replace(second=0)
+    db.remember("last_user_text", "set an alarm for ten fifty pm")
+    r = tools.call("set_reminder", {"text": "Alarm", "at": t.isoformat()})
+    assert r["status"] == "scheduled" and r["rings_in"] in ("1 hour 4 minutes", "1 hour 5 minutes")
+    # the same request repeated (Agora resends a growing sentence) does not add another
+    again = tools.call("set_reminder", {"text": "Alarm", "at": (t + timedelta(minutes=1)).isoformat()})
+    assert again["status"] == "already_set"
+    tools.call("set_reminder", {"text": "BP tablet", "at": (t + timedelta(hours=2)).isoformat(), "member": "Dadi"})
+    c = tools.call("cancel_reminder", {"which": t.strftime("%I:%M %p")})
+    assert c["status"] == "cancelled" and c["count"] == 1 and c["still_scheduled"] == 1
+    assert tools.call("cancel_reminder", {"which": "all"})["count"] == 1
+    assert tools.call("cancel_reminder", {"which": "all"})["status"] == "nothing_matched"
+    # a due reminder fires once: alarm activity + family channel message
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("Take BP tablet", "dadi", db.iso(db.now() - timedelta(seconds=5)), "scheduled", db.iso(db.now())))
+    fired = tools.due_reminders()
+    assert len(fired) == 1 and fired[0]["spoken"] == "Reminder for Dadi: Take BP tablet."
+    assert tools.due_reminders() == []
+    assert TestClient(app).get("/api/state").json()["fired"][0]["title"] == "Reminder for Dadi"
+    td = agora.join_body("ch", 1)["properties"]["turn_detection"]["config"]["end_of_speech"]
+    assert td["mode"] == "semantic" and td["semantic_config"]["pause_state_enabled"] is True

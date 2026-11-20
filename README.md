@@ -20,15 +20,17 @@ Kabir's chore and sends everyone an update. It can even bring Rohan into the liv
 | **Before:** retrieve schedules, pending tasks, preferences | `get_today` + a spoken **daily briefing** when the call starts: calendar, open chores, reminders, shopping list, household preferences (vegetarian, budget, quiet hours, Dadi's medicine) |
 | **During:** understand priorities, coordinate by conversation | Contextual memory every turn (family, active issue, pending approvals). Appliance help from the **owner's manual (RAG)** plus **repeat-fault detection** from service history |
 | **Action:** calendars, shopping lists, tasks, service requests via APIs | `find_service_slots` checks technicians **against the family calendar and quiet hours**; `book_service` (needs a spoken yes); `add_event`, `add_to_shopping_list`, `assign_task` (notifies the person on Slack) |
-| **After:** reminders, completion tracking, follow-ups | Booking adds a calendar event and a reminder 30 minutes before; `set_reminder` (Dadi's medicine), `complete_task`, `daily_summary` posted to the family channel |
+| **After:** reminders, completion tracking, follow-ups | Booking adds a calendar event and a reminder 30 minutes before; `set_reminder` / `cancel_reminder` (Dadi's medicine, alarms), `complete_task`, `daily_summary` posted to the family channel. **Reminders really ring**: a background clock fires them, the dashboard pops up with a chime, HomePilot **says them out loud in the live call** (Agora speak API) and posts them to the family channel |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
-| **Tool calling, memory, external APIs** | 14 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+| **Tool calling, memory, external APIs** | 15 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
 
 ## Safety and reliability
 - **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
 - **No double actions:** repeated sentences can't book twice, add duplicate items or re-send the summary.
 - **Never invents times:** reminders and events only use a time the user actually said.
+- **Natural turn-taking:** Agora semantic end-of-speech with pause detection, so a slow sentence or "hold on" isn't cut into several requests.
+- **Honest about itself:** the assistant only describes features that exist; durations come from the tools, never from the model's arithmetic.
 - **LLM failover:** instant switch across models and providers (Groq, Gemini) when one is rate-limited, slow or gone.
 
 ## Architecture
@@ -103,7 +105,7 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 ## MCP and tests
 ```bash
 mcp dev backend/mcp_server.py      # inspect the 14 household tools in MCP Inspector
-pytest -q                          # 22 tests, no keys needed (the LLM is faked)
+pytest -q                          # 23 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout

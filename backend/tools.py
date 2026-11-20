@@ -101,6 +101,9 @@ def get_today() -> dict:
     tasks = db.q("SELECT id, title, assignee, due_at FROM tasks WHERE status='open' ORDER BY due_at")
     reminders = db.q("SELECT text, member, remind_at FROM reminders WHERE status='scheduled' "
                      "ORDER BY remind_at")
+    for r in reminders:
+        r["when"] = _spoken_time(_dt(r["remind_at"]))
+        r["rings_in"] = _until(_dt(r["remind_at"]))
     shopping = [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")]
     members = db.q("SELECT name, role, notes FROM members")
     db.log("lookup", "Read today's family plan", f"{len(events)} events, {len(tasks)} tasks")
@@ -411,24 +414,84 @@ def complete_task(task: str) -> dict:
     return {"status": "done", "task": match["title"], "open_tasks_left": left}
 
 
+def _until(dt: datetime) -> str:
+    mins = max(0, round((dt - db.now()).total_seconds() / 60))
+    h, m = divmod(mins, 60)
+    if h and m:
+        return f"{h} hour{'s' if h > 1 else ''} {m} minute{'s' if m != 1 else ''}"
+    return f"{h} hour{'s' if h > 1 else ''}" if h else f"{m} minute{'s' if m != 1 else ''}"
+
+
 def set_reminder(text: str, at: str, member: str = "") -> dict:
-    """Schedule a reminder for a family member (e.g. medicine)."""
+    """Schedule a reminder or alarm for a family member (e.g. medicine). It rings on the
+    HomePilot dashboard, is spoken in the live call, and is posted to the family channel."""
     if not _time_said():
         return {"error": "The user hasn't said a time. Ask when."}
     when = _parse_when(at)
     if isinstance(when, str):
         return {"error": when}
-    if when < db.now() - timedelta(minutes=5):
+    if when < db.now() - timedelta(minutes=1):
         when = when + timedelta(days=1)  # "8 PM" said after 8 PM means tomorrow
     m = _member(member) if member else None
     who = m["id"] if m else "anika"
-    if db.one("SELECT id FROM reminders WHERE member=? AND remind_at=? AND status='scheduled'",
-              (who, db.iso(when))):
-        return {"status": "already_set", "when": _spoken_time(when)}
+    near = db.one("SELECT id, remind_at FROM reminders WHERE member=? AND status='scheduled' "
+                  "AND remind_at BETWEEN ? AND ?",
+                  (who, db.iso(when - timedelta(minutes=2)), db.iso(when + timedelta(minutes=2))))
+    if near:
+        return {"status": "already_set", "when": _spoken_time(when), "rings_in": _until(when)}
     db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
            (text, who, db.iso(when), "scheduled", db.iso(db.now())))
     db.log("reminder", f"Reminder for {m['name'] if m else 'Anika'}", f"{text}, {_spoken_time(when)}")
-    return {"status": "scheduled", "for": m["name"] if m else "Anika", "when": _spoken_time(when)}
+    return {"status": "scheduled", "for": m["name"] if m else "Anika", "when": _spoken_time(when),
+            "rings_in": _until(when),
+            "say": "Read back the time with AM or PM and 'in X' exactly as given here."}
+
+
+def cancel_reminder(which: str = "all") -> dict:
+    """Cancel reminders/alarms: 'all', a time like '10:50 PM', or words from the reminder."""
+    rows = db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at")
+    key = (which or "all").strip().lower()
+    if key in ("all", "everything", "all alarms", "all reminders", "every alarm"):
+        hit = rows
+    else:
+        t = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", key)
+        hit = []
+        if t:
+            hh, mm = int(t.group(1)), int(t.group(2) or 0)
+            ap = (t.group(3) or "").replace(".", "")
+            for r in rows:
+                d = _dt(r["remind_at"])
+                hours = {hh % 12 + (12 if ap == "pm" else 0)} if ap else {hh % 12, hh % 12 + 12}
+                if d.hour in hours and d.minute == mm:
+                    hit.append(r)
+        if not hit:
+            words = [w for w in key.split() if len(w) > 2]
+            hit = [r for r in rows if any(w in r["text"].lower() for w in words)]
+    if not hit:
+        return {"status": "nothing_matched",
+                "scheduled": [f"{r['text']} {_spoken_time(_dt(r['remind_at']))}" for r in rows]}
+    for r in hit:
+        db.run("UPDATE reminders SET status='cancelled' WHERE id=?", (r["id"],))
+    db.log("reminder", f"Cancelled {len(hit)} reminder{'s' if len(hit) > 1 else ''}",
+           ", ".join(_spoken_time(_dt(r["remind_at"])) for r in hit))
+    left = db.one("SELECT COUNT(*) AS n FROM reminders WHERE status='scheduled'")["n"]
+    return {"status": "cancelled", "count": len(hit),
+            "cancelled": [f"{r['text']} {_spoken_time(_dt(r['remind_at']))}" for r in hit],
+            "still_scheduled": left}
+
+
+def due_reminders() -> list[dict]:
+    """Mark reminders whose time has come as fired and return them (called every few seconds)."""
+    due = db.q("SELECT * FROM reminders WHERE status='scheduled' AND remind_at<=? ORDER BY remind_at",
+               (db.iso(db.now()),))
+    for r in due:
+        db.run("UPDATE reminders SET status='fired' WHERE id=?", (r["id"],))
+        m = db.one("SELECT name FROM members WHERE id=?", (r["member"],))
+        name = m["name"] if m else "Anika"
+        r["spoken"] = f"Reminder for {name}: {r['text']}."
+        db.log("alarm", f"Reminder for {name}", r["text"])
+        _send_family(f":alarm_clock: Reminder for {name}: {r['text']}")
+    return due
 
 
 def _send_family(message: str, urgent: bool = False) -> str:
@@ -558,8 +621,12 @@ TOOLS = {
     "complete_task": (complete_task, _s(
         "Mark a family task as done.", {"task": STR}, ["task"])),
     "set_reminder": (set_reminder, _s(
-        "Schedule a reminder for a family member (only a time the user said).",
+        "Schedule a reminder or alarm (only a time the user said). It rings on the HomePilot "
+        "dashboard, is spoken in the call and posted to the family channel.",
         {"text": STR, "at": WHEN, "member": STR}, ["text", "at"])),
+    "cancel_reminder": (cancel_reminder, _s(
+        "Cancel reminders or alarms: 'all', a time like '10:50 PM', or words from the text.",
+        {"which": STR}, ["which"])),
     "send_family_update": (send_family_update, _s(
         "Post a message to the family channel. urgent=true needs the user's yes.",
         {"message": STR, "urgent": {"type": "boolean"}}, ["message"])),

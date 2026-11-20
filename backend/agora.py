@@ -74,6 +74,14 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
             "remote_rtc_uids": [str(user_uid)],
             "idle_timeout": 180,
             "asr": {"language": config.AGORA_ASR_LANGUAGE},
+            # Wait for the end of the sentence (semantic), and treat "hold on" as a pause,
+            # so a slow sentence isn't split into several turns.
+            "turn_detection": {"mode": "default", "config": {
+                "start_of_speech": {"mode": "vad", "vad_config": {
+                    "interrupt_duration_ms": 200, "prefix_padding_ms": 800}},
+                "end_of_speech": {"mode": "semantic", "semantic_config": {
+                    "silence_duration_ms": 640, "max_wait_ms": 3000,
+                    "pause_state_enabled": True}}}},
             "llm": {
                 "url": f"{config.PUBLIC_BASE_URL}/chat/completions",
                 "api_key": config.BRAIN_API_KEY,
@@ -114,9 +122,15 @@ async def start_agent(channel: str | None = None, user_uid: int = USER_UID) -> d
         return {"ok": False, "error": "Missing settings: " + ", ".join(missing)}
     if _state["agent_id"]:
         await stop_agent()
+    body = join_body(channel, user_uid)
     async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(),
-                         json=join_body(channel, user_uid))
+        r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(), json=body)
+        if r.status_code == 400 and "turn_detection" in r.text:
+            # Older engine versions: fall back to default turn detection rather than fail.
+            body["properties"].pop("turn_detection", None)
+            db.log("system", "Agora rejected semantic turn detection, using default", r.text[:200])
+            r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(),
+                             json=body)
     if r.status_code >= 300:
         db.log("error", "Agent start failed", f"{r.status_code} {r.text[:300]}")
         return {"ok": False, "status": r.status_code, "error": r.text}
@@ -136,3 +150,22 @@ async def stop_agent() -> dict:
     _state["agent_id"] = None
     db.log("system", "Voice agent left", agent_id)
     return {"ok": r.status_code < 300, "status": r.status_code}
+
+
+async def speak(text: str) -> bool:
+    """Make the live agent say something on its own (Agora 'speak' API), e.g. a due reminder."""
+    agent_id = _state["agent_id"]
+    if not agent_id or missing_settings():
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"{API}/{config.AGORA_APP_ID}/agents/{agent_id}/speak",
+                             headers=_auth_header(),
+                             json={"text": text[:500], "priority": "INTERRUPT",
+                                   "interruptable": True})
+        if r.status_code >= 300:
+            db.log("error", "Agent speak failed", f"{r.status_code} {r.text[:200]}")
+        return r.status_code < 300
+    except httpx.HTTPError as e:
+        db.log("error", "Agent speak failed", str(e)[:200])
+        return False
