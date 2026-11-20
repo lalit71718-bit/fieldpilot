@@ -558,3 +558,67 @@ def test_spending_summary_adds_repairs_and_orders(monkeypatch):
     s = tools.call("spending_summary", {"period": "week"})
     assert s["total_inr"] == fee + 139 and s["by_category"]["Food & delivery"] == 139
     assert TestClient(app).get("/api/state").json()["spent_week"] == s["total_inr"]
+
+
+def test_changing_the_time_moves_the_event_instead_of_duplicating():
+    from datetime import timedelta
+    day = (db.now() + timedelta(days=1)).date().isoformat()
+    assert tools.call("add_event", {"title": "Hackathon", "start_at": f"{day}T07:00", "member": "Anika"})["status"] == "added"
+    r = tools.call("add_event", {"title": "Hackathon wake up", "start_at": f"{day}T06:00"})
+    assert r["status"] == "moved"
+    ev = db.q("SELECT * FROM events WHERE title LIKE 'Hackathon%'")
+    assert len(ev) == 1 and ev[0]["start_at"].endswith("06:00:00") and ev[0]["member"] == "anika"
+    assert tools.call("cancel_event", {"title": "hackathon"})["status"] == "removed"
+    assert not db.q("SELECT * FROM events WHERE title LIKE 'Hackathon%'")
+
+
+def test_calendar_on_phone_shows_qr_and_single_item_ics(monkeypatch):
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    from datetime import timedelta
+    at = db.iso(db.now() + timedelta(hours=8))
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("Wake up for Hackathon", "anika", at, "scheduled", at))
+    c = TestClient(app)
+    assert c.get("/api/state").json()["cal_qr"] is False
+    assert tools.call("calendar_on_phone", {})["status"] == "qr_shown"
+    st = c.get("/api/state").json()
+    assert st["cal_qr"] is True and st["reminders"][0]["gcal"].startswith("https://calendar.google.com/")
+    rid = st["reminders"][0]["id"]
+    one = c.get(f"/calendar/reminder/{rid}.ics").text
+    assert one.count("BEGIN:VEVENT") == 1 and "Wake up for Hackathon" in one and "TRIGGER:PT0M" in one
+    ev = c.get(f"/calendar/event/{st['events'][0]['id']}.ics").text
+    assert ev.count("BEGIN:VEVENT") == 1 and "BEGIN:VALARM" in ev
+    assert c.get("/cal.html").status_code == 200
+
+
+def test_yes_after_offer_to_post_counts_as_asking(monkeypatch):
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    db.remember("last_assistant_text", "Would you like me to post it to the family channel?")
+    db.remember("last_user_text", "Yes. Sure.")
+    assert tools.call("send_family_update", {"message": "Wake-up at 6 AM"})["status"] == "sent"
+    db.remember("last_assistant_text", "Anything else?")
+    db.remember("last_user_text", "Yes. Sure.")
+    assert "error" in tools.call("send_family_update", {"message": "Another note"})
+
+
+def test_older_request_stops_when_a_newer_one_arrives(monkeypatch):
+    import asyncio
+
+    async def slow_round(messages, rnd):
+        for w in ["one ", "two ", "three "]:
+            await asyncio.sleep(0.01)
+            yield w
+
+    monkeypatch.setattr(config, "LLM_API_KEY", "x")
+    monkeypatch.setattr(brain, "_stream_round", slow_round)
+
+    async def run():
+        async def collect(text):
+            return [p async for p in brain.run_turn([{"role": "user", "content": text}])]
+        first = asyncio.create_task(collect("I would like"))
+        await asyncio.sleep(0.015)
+        second = await collect("I would like to add a Google Calendar")
+        return await first, second
+
+    old, new = asyncio.run(run())
+    assert "".join(new).strip() == "one two three" and "three" not in "".join(old)

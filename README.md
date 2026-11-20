@@ -38,12 +38,12 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | **Shopping, end to end** | `add_to_shopping_list`, `mark_bought`, `remove_from_shopping_list`, `shopping_status` (estimated total), `order_groceries` (home delivery slot that avoids the calendar, needs a yes). Rohan gets a **live list on his phone** (`/list.html`) and ticks items in the store; when the last one is ticked his pickup task completes and the family is told |
 | **Ordering by voice over MCP** | “Order a veg biryani” → `store_search` → `store_add_to_cart` → `store_checkout` reads back items, total and time → **“yes”** → the store requests payment and **you approve it on your phone** (QR on the dashboard, `/pay.html`) → live status: preparing, on the way, delivered, announced in the call. HomePilot talks to the store **only through MCP** (`backend/store_client.py` → `/store/mcp`), the same protocol as Swiggy’s and Zomato’s official MCP servers |
 | **After:** reminders, completion tracking, follow-ups | Booking adds a calendar event and a reminder 30 minutes before; `set_reminder` / `cancel_reminder` (Dadi's medicine, alarms), `complete_task`, `daily_summary` posted to the family channel. **Reminders really ring**: a background clock fires them, the dashboard pops up with a chime, HomePilot **says them out loud in the live call** (Agora speak API) and posts them to the family channel |
-| **Real calendar sync** | The family calendar is a live **iCalendar feed** at `/calendar.ics`. On the dashboard, **+ Google Calendar** / **Phone calendar** subscribes once, and every booking, delivery and reminder HomePilot creates appears in the family's real phone calendar (with alerts). Each event also has a one-tap “add to Google Calendar” link, and booking confirmations on Slack include it |
+| **Real calendar sync** | Say “put it on my phone” (or tap **QR for phone**): a QR code opens `/cal.html` on the phone, where one tap adds each alarm or event to Google Calendar / the phone calendar, so it rings **even if the HomePilot screen is off**. Changing a time (“make it 6 instead of 7”) moves the event, never duplicates it. The family calendar is also a live **iCalendar feed** at `/calendar.ics`. On the dashboard, **+ Google Calendar** / **Phone calendar** subscribes once, and every booking, delivery and reminder HomePilot creates appears in the family's real phone calendar (with alerts). Each event also has a one-tap “add to Google Calendar” link, and booking confirmations on Slack include it |
 | **Missed-medicine alert** | If nobody presses **Got it** (or says “Dadi took her tablet”, `reminder_done`) within **5 minutes**, HomePilot escalates: “⚠️ Dadi hasn't confirmed the 8 PM reminder: take her BP tablet. Can someone check on Dadi?” goes to the family channel and is spoken in the live call |
 | **Family spending summary** | “How much did we spend this week?” → `spending_summary` adds up technician bookings, grocery deliveries and **paid** store orders, with a breakdown by category and a warning against the monthly budget and the 1,500-rupee repair limit. “Spent this week” is a live KPI on the dashboard |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
-| **Tool calling, memory, external APIs** | 27 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+| **Tool calling, memory, external APIs** | 29 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
 
 ## Safety and reliability
 - **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
@@ -66,7 +66,7 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
    ├─ brain.py       tool-calling loop, streamed replies, failover, speech cleanup
    ├─ memory         family, preferences, active issue, pending approvals (every turn)
    ├─ rag.py         search over appliance owner's manuals
-   ├─ tools.py       27 household tools + confirmation gate + "no means no" guard
+   ├─ tools.py       29 household tools + confirmation gate + "no means no" guard
    └─ mcp_server.py  the same tools over MCP
         │
         ▼ reply text → Murf Falcon TTS (via Agora) → spoken answer
@@ -90,7 +90,7 @@ Open the website at `/` (hero, how it works, features, a live “Try it” box, 
 | Wow | "Get Rohan on this call." | Slack join link → Rohan joins the live call from his phone |
 | Money | "How much did we spend this week?" | Total with breakdown (repairs, groceries, food) and budget check |
 | Safety net | Let Dadi's reminder ring without pressing Got it | After 5 minutes the family gets “Dadi hasn't confirmed her BP tablet” |
-| Calendar | Click **+ Google Calendar** on the dashboard | The booking shows up in your real phone calendar |
+| Calendar | “Wake me at 6 tomorrow… put it on my phone” | QR code on screen → scan → tap Add → the alarm is in your phone's calendar |
 
 Safety moment: at the yellow banner say **"No, don't book it"**. Nothing is booked.
 
@@ -129,8 +129,8 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 
 ## MCP and tests
 ```bash
-mcp dev backend/mcp_server.py      # inspect the 27 household tools in MCP Inspector
-pytest -q                          # 38 tests, no keys needed (the LLM is faked)
+mcp dev backend/mcp_server.py      # inspect the 29 household tools in MCP Inspector
+pytest -q                          # 42 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout

@@ -419,15 +419,67 @@ def add_event(title: str, start_at: str, member: str = "", minutes: int = 60) ->
         return {"error": when}
     if not _time_said():
         return {"error": "The user hasn't said a time. Ask when."}
+    m = _member(member) if member else None
+    # "Make it 6 instead of 7": the same event on the same day is MOVED, never duplicated.
+    same_day = [e for e in db.q("SELECT * FROM events WHERE source='voice' AND substr(start_at,1,10)=?",
+                                (when.date().isoformat(),)) if _same_event(title, e["title"])]
+    if same_day:
+        e = same_day[0]
+        if _dt(e["start_at"]) == when:
+            return {"status": "already_on_calendar", "when": _spoken_time(when)}
+        db.run("UPDATE events SET start_at=?, minutes=?, member=? WHERE id=?",
+               (db.iso(when), minutes, m["id"] if m else e["member"], e["id"]))
+        for extra in same_day[1:]:
+            db.run("DELETE FROM events WHERE id=?", (extra["id"],))
+        db.log("calendar", f"Moved: {e['title']}", f"{_spoken_time(_dt(e['start_at']))} → {_spoken_time(when)}")
+        return {"status": "moved", "from": _spoken_time(_dt(e["start_at"])), "to": _spoken_time(when),
+                "note": "The old time is gone from the calendar (and from synced phones)."}
     clash = _clashes(when, minutes)
     if clash:
         return {"status": "clash", "clashes_with": [c["title"] for c in clash],
                 "note": "Tell the user and ask whether to keep both or pick another time."}
-    m = _member(member) if member else None
     db.run("INSERT INTO events (title,member,start_at,minutes,location,source) VALUES (?,?,?,?,?,?)",
            (title, m["id"] if m else "family", db.iso(when), minutes, "", "voice"))
     db.log("calendar", f"Added: {title}", _spoken_time(when))
-    return {"status": "added", "when": _spoken_time(when)}
+    return {"status": "added", "when": _spoken_time(when),
+            "phone": "It can go on the user's phone calendar: calendar_on_phone shows a QR code."}
+
+
+def _same_event(a: str, b: str) -> bool:
+    """'Hackathon' vs 'Hackathon wake up': one title's words contained in the other's."""
+    ca, cb = _canon(a), _canon(b)
+    return _similar(a, b, 0.6) or bool(ca and cb and (ca <= cb or cb <= ca))
+
+
+def cancel_event(title: str, when: str = "") -> dict:
+    """Remove an event the family added (by name, optionally a time or day)."""
+    rows = [e for e in db.q("SELECT * FROM events WHERE source='voice' AND start_at>=?",
+                            (db.iso(db.now() - timedelta(hours=1)),)) if _same_event(title, e["title"])
+            or title.lower() in e["title"].lower()]
+    if when and len(rows) > 1:
+        t = _parse_when(when)
+        if not isinstance(t, str):
+            rows = [e for e in rows if _dt(e["start_at"]) == t] or rows[:1]
+    if not rows:
+        return {"status": "nothing_matched",
+                "events": [e["title"] for e in db.q("SELECT title FROM events WHERE source='voice'")]}
+    for e in rows:
+        db.run("DELETE FROM events WHERE id=?", (e["id"],))
+    db.log("calendar", f"Removed: {rows[0]['title']}", ", ".join(_spoken_time(_dt(e["start_at"])) for e in rows))
+    return {"status": "removed", "count": len(rows)}
+
+
+def calendar_on_phone() -> dict:
+    """Put the family calendar and alarms on the user's own phone: shows a QR code on the
+    dashboard that opens a page with one-tap 'Add to Google Calendar' / phone calendar buttons."""
+    db.remember("show_cal_qr", db.iso(db.now()))
+    link = f"{config.PUBLIC_BASE_URL or ''}/cal.html"
+    _send_family(f":iphone: Put the HomePilot family calendar and alarms on your phone: {link}")
+    db.log("calendar", "Calendar QR shown", "Scan to add events and alarms to the phone")
+    return {"status": "qr_shown", "say": (
+        "A QR code is now on the dashboard. Scan it with your phone camera and tap Add for each "
+        "event or alarm, or Subscribe to get the whole family calendar. Then it alerts on the "
+        "phone even if this device is off. The link is also in the family channel.")}
 
 
 def add_to_shopping_list(items: list[str], note: str = "") -> dict:
@@ -872,6 +924,10 @@ def send_family_update(message: str, urgent: bool = False) -> dict:
         r"(family|everyone|everybody|them|rohan|kabir|dadi|grandma|all)\b"
         r"|\b(send|post)\b.*\b(family|everyone|update|message|group|slack|whatsapp)\b"
         r"|\bfamily (update|group|channel|chat)\b|\bannounce\b", said))
+    if not asked:  # "Yes, sure" right after HomePilot offered to post it
+        offered = db.recall("last_assistant_text").lower()
+        asked = bool(set(re.findall(r"[a-z]+", said)) & (YES_WORDS | {"please", "do"})) and \
+            bool(re.search(r"family (channel|group|chat)|post|send|message the family|notify", offered))
     if not asked:
         return {"error": "The user did not ask to message the family. Don't post your own "
                          "notes; just answer the user."}
@@ -1087,6 +1143,11 @@ TOOLS = {
     "remember_fact": (remember_fact, _s(
         "Save something the user explicitly asks you to remember (a birthday, a preference, a "
         "phone number). Saved facts appear in LIVE CONTEXT.", {"fact": STR}, ["fact"])),
+    "cancel_event": (cancel_event, _s(
+        "Remove an event from the family calendar.", {"title": STR, "when": STR}, ["title"])),
+    "calendar_on_phone": (calendar_on_phone, _s(
+        "Put the calendar / alarms on the user's own phone or Google Calendar (shows a QR code "
+        "on the dashboard). Use when they ask for Google Calendar, their phone, or a QR code.", {})),
     "reminder_done": (reminder_done, _s(
         "Someone confirms a reminder was done ('Dadi took her BP tablet'); stops the follow-up alert.",
         {"member": STR, "what": STR})),

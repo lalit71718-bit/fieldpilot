@@ -62,6 +62,15 @@
           <p id="store-sub" class="muted"></p>
         </div>
       </div>
+      <div id="calqr" class="card calqr-card hidden" aria-live="polite">
+        <div id="calqr-code" class="store-qr" aria-label="QR code to put the calendar and alarms on your phone"></div>
+        <div>
+          <button id="calqr-close" class="x" type="button" aria-label="Hide">&times;</button>
+          <h3>Put it on your phone</h3>
+          <p class="store-title">Scan with your phone camera, then tap <b>Add</b> on each alarm or event.</p>
+          <p class="muted">Your phone's calendar will ring even if this screen is off. Tap <b>Google Calendar</b> on that page to keep everything in sync.</p>
+        </div>
+      </div>
       <div id="invite" class="invite card hidden" aria-live="polite">
         <div id="invite-qr" class="invite-qr" aria-label="QR code to join the call"></div>
         <div class="invite-body">
@@ -80,7 +89,8 @@
         <div class="card"><h3>Family calendar <span class="cal-sync">
           <a id="cal-google" target="_blank" rel="noopener" title="Subscribe in Google Calendar: bookings and deliveries appear on your phone">+ Google Calendar</a>
           <a id="cal-phone" title="Subscribe on iPhone / Android / Outlook">Phone calendar</a>
-          <button id="cal-copy" type="button" title="Copy the calendar feed link">Copy link</button></span></h3>
+          <button id="cal-copy" type="button" title="Copy the calendar feed link">Copy link</button>
+          <button id="cal-qr" type="button" title="Show a QR code for your phone">QR for phone</button></span></h3>
           <div id="calendar"></div></div>
         <div class="card">
           <div class="card-head"><h3>Home issue</h3><span id="issue-status" class="pill">-</span></div>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomePilot · On your phone</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="list-page">
+  <header class="topbar">
+    <div class="brand"><span class="logo">HP</span> homepilot <small>on your phone</small></div>
+    <div class="chips"><span id="sync" class="chip on">Live</span></div>
+  </header>
+  <main class="list-wrap">
+    <h1 class="list-title">Alarms and plans, on your phone</h1>
+    <p class="muted">Tap <b>Add</b> on an alarm or event. Your phone's calendar will alert you, even if the HomePilot screen is off.</p>
+    <div class="card">
+      <h3>Alarms</h3>
+      <ul id="alarms" class="cal-list"></ul>
+    </div>
+    <div class="card">
+      <h3>Family calendar</h3>
+      <ul id="events" class="cal-list"></ul>
+    </div>
+    <div class="card">
+      <h3>Keep everything in sync</h3>
+      <p class="muted">Subscribe once and every new booking, delivery and appointment HomePilot adds shows up by itself.</p>
+      <div class="cal-actions">
+        <a id="sub-google" class="cal-btn" target="_blank" rel="noopener">Google Calendar</a>
+        <a id="sub-phone" class="cal-btn ghost">iPhone / Outlook</a>
+      </div>
+      <p class="muted small">Subscribed calendars refresh every few hours (Google) or every 15 minutes (iPhone). For an alarm that must ring, tap its <b>Add</b> button above.</p>
+    </div>
+  </main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const feed = location.origin + "/calendar.ics", webcal = feed.replace(/^https?:/, "webcal:");
+$("sub-google").href = "https://calendar.google.com/calendar/render?cid=" + encodeURIComponent(webcal);
+$("sub-phone").href = webcal;
+const android = /android/i.test(navigator.userAgent);
+function when(t) {
+  const d = new Date(t.replace(" ", "T")), now = new Date();
+  const day = d.toDateString() === now.toDateString() ? "Today" :
+    d.toDateString() === new Date(now.getTime() + 864e5).toDateString() ? "Tomorrow" :
+    d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  return day + " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+function row(title, at, kind, id, gcal) {
+  // Android: Google Calendar link (opens the app). iPhone and others: .ics file with a built-in alert.
+  const ics = `/calendar/${kind}/${id}.ics`;
+  return `<li><div><b>${esc(title)}</b><small class="muted">${esc(when(at))}</small></div>
+    <span class="cal-actions"><a class="cal-btn" href="${esc(android ? gcal : ics)}" ${android ? 'target="_blank" rel="noopener"' : ""}>Add</a>
+    <a class="cal-btn ghost" href="${esc(android ? ics : gcal)}" ${android ? "" : 'target="_blank" rel="noopener"'}>${android ? ".ics" : "Google"}</a></span></li>`;
+}
+async function load() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    $("sync").textContent = "Live"; $("sync").classList.add("on");
+    const now = new Date(s.now.replace(" ", "T")).getTime() - 36e5;
+    $("alarms").innerHTML = s.reminders.map((r) => row("⏰ " + r.text, r.remind_at, "reminder", r.id, r.gcal)).join("")
+      || '<li class="muted">No alarms set. Ask HomePilot: "Wake me at 6 AM tomorrow".</li>';
+    $("events").innerHTML = s.events.filter((e) => new Date(e.start_at.replace(" ", "T")).getTime() >= now)
+      .map((e) => row(e.title, e.start_at, "event", e.id, e.gcal)).join("") || '<li class="muted">Nothing scheduled.</li>';
+  } catch { $("sync").textContent = "Offline"; $("sync").classList.remove("on"); }
+}
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>

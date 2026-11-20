@@ -305,6 +305,17 @@ function render(s) {
       `<li class="${i.joined ? "joined" : ""}">${i.joined ? "✓" : "…"} <b>${esc(i.who)}</b> ${i.joined ? "joined" : "waiting to join"}${i.guest ? ' <span class="muted">(guest)</span>' : ""}</li>`).join("");
   } else card.classList.add("hidden");
 
+  // "Put it on my phone": QR to the phone calendar page (shown by voice or the QR button).
+  const cq = $("calqr");
+  if (cq) {
+    cq.classList.toggle("hidden", !s.cal_qr);
+    if (s.cal_qr && !cq.dataset.done && window.qrcode) {
+      const q = qrcode(0, "M"); q.addData(location.origin + "/cal.html"); q.make();
+      $("calqr-code").innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+      cq.dataset.done = "1";
+    }
+  }
+
   // Store order placed over MCP: payment QR, then the delivery progress.
   const so = (s.store_orders || [])[0], sc = s.store_cart;
   const storeCard = $("store");
@@ -350,6 +361,10 @@ refresh();
   const g = document.getElementById("cal-google"), p = document.getElementById("cal-phone"), c = document.getElementById("cal-copy");
   if (g) g.href = "https://calendar.google.com/calendar/render?cid=" + encodeURIComponent(webcal);
   if (p) p.href = webcal;
+  const qrBtn = document.getElementById("cal-qr"), close = document.getElementById("calqr-close");
+  const setQr = (show) => fetch("/api/calendar/qr?show=" + show, { method: "POST" }).then(() => typeof refresh === "function" && refresh()).catch(() => {});
+  if (qrBtn) qrBtn.onclick = () => setQr(true);
+  if (close) close.onclick = () => { document.getElementById("calqr").classList.add("hidden"); setQr(false); };
   if (c) c.onclick = async () => {
     try { await navigator.clipboard.writeText(feed); c.textContent = "Copied"; } catch { prompt("Calendar feed link:", feed); }
     setTimeout(() => (c.textContent = "Copy link"), 1500);

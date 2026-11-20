@@ -154,7 +154,9 @@ def state():
         "history": db.q("SELECT * FROM appliance_history WHERE appliance_id=? ORDER BY date DESC",
                         (active,)) if active else [],
         "bookings": db.q("SELECT * FROM bookings ORDER BY created_at DESC"),
-        "reminders": db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at"),
+        "reminders": [dict(r, gcal=tools.calendar_links("⏰ " + r["text"], r["remind_at"], 10)["google"])
+                      for r in db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at")],
+        "cal_qr": _recent(db.recall("show_cal_qr"), 15),
         "fired": db.q("SELECT * FROM activity WHERE kind='alarm' ORDER BY id DESC LIMIT 5"),
         "pending": db.q("SELECT * FROM pending_actions WHERE status='awaiting_confirmation'"),
         "notifications": db.q("SELECT * FROM notifications ORDER BY id DESC LIMIT 10"),
@@ -304,12 +306,37 @@ async def store_pay(request: Request):
     return r
 
 
+def _recent(stamp: str, minutes: int) -> bool:
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        return bool(stamp) and _dt.fromisoformat(stamp) >= db.now() - _td(minutes=minutes)
+    except ValueError:
+        return False
+
+
+@app.post("/api/calendar/qr")
+def calendar_qr(show: bool = True):
+    db.remember("show_cal_qr", db.iso(db.now()) if show else "")
+    return {"ok": True}
+
+
 def _ics_escape(t: str) -> str:
     return t.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
+@app.get("/calendar/{kind}/{item_id}.ics")
+def calendar_item(kind: str, item_id: int):
+    """One event or alarm as an .ics file: tapping it on a phone adds it to the phone's
+    calendar with an alert (works on iPhone and Android without any account linking)."""
+    return _ics((kind, item_id))
+
+
 @app.get("/calendar.ics")
 def calendar_feed():
+    return _ics(None)
+
+
+def _ics(only):
     """The family calendar as a live iCalendar feed. Subscribe once from Google Calendar
     ('From URL') or the phone's calendar (webcal://) and HomePilot's bookings, deliveries and
     appointments show up there, with alarms."""
@@ -322,6 +349,8 @@ def calendar_feed():
              "REFRESH-INTERVAL;VALUE=DURATION:PT15M", "X-PUBLISHED-TTL:PT15M"]
     names = {m["id"]: m["name"] for m in db.q("SELECT id, name FROM members")}
     for e in db.q("SELECT * FROM events"):
+        if only and only != ("event", e["id"]):
+            continue
         st = _dt.fromisoformat(e["start_at"])
         lines += ["BEGIN:VEVENT", f"UID:homepilot-event-{e['id']}@homepilot", f"DTSTAMP:{now}",
                   f"DTSTART:{fmt(st)}", f"DTEND:{fmt(st + _td(minutes=e['minutes'] or 60))}",
@@ -329,11 +358,13 @@ def calendar_feed():
                   f"DESCRIPTION:{_ics_escape('For ' + names.get(e['member'], 'the family') + ' · added by HomePilot')}"]
         if e["location"]:
             lines.append(f"LOCATION:{_ics_escape(e['location'])}")
-        if (e["source"] or "").startswith(("booking", "order")):
+        if only or (e["source"] or "").startswith(("booking", "order")):
             lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ics_escape(e['title'])}",
                       "TRIGGER:-PT30M", "END:VALARM"]
         lines.append("END:VEVENT")
     for r in db.q("SELECT * FROM reminders WHERE status='scheduled'"):
+        if only and only != ("reminder", r["id"]):
+            continue
         st = _dt.fromisoformat(r["remind_at"])
         lines += ["BEGIN:VEVENT", f"UID:homepilot-reminder-{r['id']}@homepilot", f"DTSTAMP:{now}",
                   f"DTSTART:{fmt(st)}", f"DTEND:{fmt(st + _td(minutes=10))}",
@@ -342,7 +373,8 @@ def calendar_feed():
                   "TRIGGER:PT0M", "END:VALARM", "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return Response("\r\n".join(lines) + "\r\n", media_type="text/calendar; charset=utf-8",
-                    headers={"Content-Disposition": "inline; filename=homepilot-family.ics"})
+                    headers={"Content-Disposition": "inline; filename=" + (
+                        f"homepilot-{only[0]}-{only[1]}.ics" if only else "homepilot-family.ics")})
 
 
 @app.get("/healthz")

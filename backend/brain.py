@@ -61,11 +61,17 @@ ACTIONS
   USER'S PHONE (UPI-style request; QR on the dashboard). Never ask for a PIN, card or bank
   details, and never say it is paid until store_order_status says so.
 - "Dadi took her tablet" / "done": reminder_done. "How much did we spend?": spending_summary
-  (quote its numbers only). Bookings and deliveries are also on the family's real calendar
-  feed (they can subscribe on their phone or Google Calendar from the dashboard).
+  (quote its numbers only).
+- GOOGLE CALENDAR / PHONE: HomePilot's calendar DOES sync to phones. If the user mentions
+  Google Calendar, their phone, a QR code, or "what if this device is off": call
+  calendar_on_phone (shows a QR code; they scan it and tap Add / Subscribe; then events and
+  alarms alert on their phone too). Never say you can't connect to Google Calendar.
+- Changing a time ("make it 6 instead of 7"): call add_event with the new time (it MOVES the
+  event, no duplicate) and cancel_reminder + set_reminder for the alarm. cancel_event removes one.
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
 - Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
-  are spoken in this call and posted to the family channel (not phone alarms). If the user
+  are spoken in this call and posted to the family channel; with calendar_on_phone they also
+  alert on the user's phone. If nobody confirms within 5 minutes, the family is alerted. If the user
   is unclear about AM or PM, ask. Never compute durations yourself: use "rings_in".
 - WHAT HOMEPILOT IS (use these facts, never invent others): a voice assistant with a live
   dashboard that is view-only. Everything is done by asking you: to delete an alarm the user
@@ -330,6 +336,8 @@ FILLERS = {
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",
     "reminder_done": "Great, noting that.",
+    "calendar_on_phone": "Putting a QR code on the screen.",
+    "cancel_event": "Removing it.",
     "spending_summary": "Adding it up.",
     "remember_fact": "I'll remember that.",
     "cancel_reminder": "Cancelling that.",
@@ -339,8 +347,19 @@ FILLERS = {
 }
 
 
+_TURN = {"n": 0}
+
+
 async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
-    """Yields text pieces of the spoken reply."""
+    """Yields text pieces of the spoken reply.
+
+    Agora can send a sentence twice while the user is still talking ("I would like..." then
+    "I would like to add a Google Calendar"). Only the newest request answers: an older turn
+    stops as soon as a newer one starts, so the user never hears two replies or gets
+    double actions."""
+    _TURN["n"] += 1
+    me = _TURN["n"]
+    stale = lambda: _TURN["n"] != me
     if not config.LLM_API_KEY:
         yield "My language model key is not configured yet. Please set LLM_API_KEY."
         return
@@ -357,6 +376,8 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
         rnd = _Round()
         buf = ""  # clean speech on whole words: units like "uF" can arrive split across chunks
         async for piece in _stream_round(messages, rnd):
+            if stale():
+                return
             buf += piece
             cut = max(buf.rfind(" "), buf.rfind("\n"))
             if cut > 0:
@@ -368,6 +389,8 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
             spoken.append(out)
             yield out
         content, calls = rnd.content, rnd.calls
+        if stale():
+            return
         if not calls:
             break
         if not said_filler and not content:
@@ -390,6 +413,7 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
         spoken.append(msg)
         yield msg
     db.log("agent", "FieldPilot", "".join(spoken).strip())
+    db.remember("last_assistant_text", "".join(spoken).strip()[-400:])
 
 
 def sse_chunk(cid: str, model: str, delta: dict, finish: str | None = None) -> str:
