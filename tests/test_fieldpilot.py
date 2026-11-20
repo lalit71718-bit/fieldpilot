@@ -254,3 +254,24 @@ def test_followup_is_moved_not_duplicated_and_utc_converted():
     utc = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T05:00Z", "purpose": "c"})
     expected = datetime(2030, 1, 1, 5, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     assert utc["when"] == expected.isoformat(sep=" ")
+
+
+def test_followup_needs_a_time_from_the_technician():
+    db.remember("last_user_text", "Wrap it up please")
+    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T05:30", "purpose": "x"})
+    assert "error" in r
+    db.remember("last_user_text", "I'll come back tomorrow at ten thirty")
+    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "x"})
+    assert r["status"] == "scheduled"
+
+
+def test_units_split_across_stream_chunks(monkeypatch):
+    class Split(FakeLLM):
+        async def create(self, **kw):
+            async def gen():
+                for p in ["It should be 40.5 ", "µ", "F at least."]:
+                    yield _chunk(p)
+            return gen()
+    monkeypatch.setattr(brain, "_targets", lambda: [(Split(), "m")])
+    r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
+    assert r.json()["reply"] == "It should be 40.5 microfarad at least."

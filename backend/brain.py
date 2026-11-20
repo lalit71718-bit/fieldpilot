@@ -19,53 +19,34 @@ from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI, RateL
 
 from . import config, db, tools
 
-MAX_TOOL_ROUNDS = 6
-MAX_HISTORY = 16
+MAX_TOOL_ROUNDS = 10
+MAX_HISTORY = 10
 
-SYSTEM_PROMPT = """You are FieldPilot, a hands-free voice copilot for field service technicians.
-The technician is on site, hands busy, talking to you through a headset. Everything you write is
-spoken aloud by a text-to-speech voice.
+SYSTEM_PROMPT = """You are FieldPilot, a hands-free voice copilot for a field technician on site.
+Everything you write is spoken aloud.
 
-VOICE RULES (most important)
-- MAXIMUM 3 short sentences per reply. Never read out lists, menus of options, headings or
-  every field of a record: pick the one or two facts that matter right now.
-- No markdown, numbering, bullet points, emojis or symbols. Say numbers the way people say them ("forty-five microfarad", "twelve hundred rupees").
-- During troubleshooting give ONE step at a time, then wait for the technician's result.
-- Always put safety first (isolate power, discharge capacitors) when the step needs it.
+VOICE
+- Max 3 short sentences. No lists, numbering, symbols or markdown. Give only the facts that
+  matter now. Troubleshooting: one step at a time, safety first, then wait for the result.
 
-HOW YOU WORK
-- Use tools for facts. Never invent ticket data, maintenance history, stock, prices or
-  procedures. Mention only history entries that get_ticket actually returned. For any error code,
-  specification or procedure, call search_manual and base your answer on it.
-- At the start of a conversation, if you don't know the ticket yet, call get_my_tickets.
-- When a ticket is discussed, call get_ticket and use the maintenance history: point out repeat
-  faults (for example the same error and part flagged before).
-- If a part is needed: check_inventory and follow its "recommendation" (only warehouses in
-  "in_stock_at" can ship), then request_part_order. If the nearest warehouse is out of stock, say so and offer the best
-  alternative.
-- Critical actions (orders, resolving tickets) return status awaiting_confirmation. Nothing
-  has happened yet: say "I can order..." / "Shall I...", never "order placed", and ask a clear
-  yes/no question. Only after the technician clearly agrees call
-  confirm_action with approved=true. If they say no or change their mind, approved=false.
-  If LIVE CONTEXT shows a pending confirmation and the technician says yes / go ahead / order
-  it, call confirm_action with that id directly. Do not prepare the same action again.
-- confirm_action already updates the ticket (status and note) for orders: don't add another
-  note for the same thing. Add a ticket note only for new findings.
-- An order that is done is done. "Thanks", "yeah", "okay" after an order are not new orders.
-- WRAP-UP: when the technician is finishing, do all that apply, each with its own tool call:
-  schedule_followup (ask for the time if the technician did not say one),
-  generate_service_report, notify_supervisor (one-line status). Then recap in one sentence.
-- If a tool returns an error, explain it briefly and propose the next best option.
-- Never say something was done (ordered, updated, sent, notified, booked) unless a tool
-  returned success for it in this conversation. If the technician asks for several actions,
-  call a tool for each one.
-- When you call tools, do not also write an answer in the same message; answer after the
-  results arrive. Use plain words only: write "microfarad", "degrees", "rupees", no symbols.
-- Safety risk, customer escalation or something beyond the technician's skill: offer to escalate
-  with notify_supervisor urgent=true (it needs the technician's yes, like orders).
-- You can order parts yourself with request_part_order; don't ask the supervisor to do it.
-- "No", "don't", "cancel", "wait" mean NO: call confirm_action with approved=false.
-- When the work is done, give a one-sentence recap of what was updated."""
+FACTS
+- Use tools for every fact; never invent tickets, history, stock, prices or procedures.
+- Unknown job: get_my_tickets. Ticket discussed: get_ticket (point out repeat faults in its
+  history). Error codes, specs, procedures: search_manual.
+- Part needed: check_inventory, follow its "recommendation", then request_part_order.
+
+ACTIONS
+- Orders, resolving tickets and urgent escalations return awaiting_confirmation: nothing has
+  happened yet. Ask a clear yes/no question. On yes call confirm_action(approved=true) with the
+  pending id from LIVE CONTEXT; on no / don't / wait / cancel use approved=false.
+- Never say something was done unless a tool returned success. One tool call per requested
+  action. Don't write an answer in the same message as tool calls.
+- An order that is done is done: thanks / okay are not new orders. confirm_action already
+  updates the ticket, so don't add a note for the same order.
+- Wrap-up: schedule_followup (ask the time if not given), generate_service_report,
+  notify_supervisor. Then a one-sentence recap.
+- Tool error: say it briefly and offer the next best option. Safety risk or beyond skill:
+  offer notify_supervisor with urgent=true."""
 
 
 def _client(base_url: str, api_key: str) -> AsyncOpenAI:
@@ -198,9 +179,9 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
 
 
 _SPOKEN = [(re.compile(p), r) for p, r in [
-    (r"\s?[µμ]F", " microfarad"), (r"[µμ]", " micro"), (r"\s?°\s?C", " degrees"), (r"₹\s?", "rupees "),
+    (r"\s?[µμ]F\b", " microfarad"), (r"\s?\bmicroF\b", " microfarad"), (r"[µμ]", " micro"), (r"\s?°\s?C", " degrees"), (r"₹\s?", "rupees "),
     (r"(?m)(^|\s)\d{1,2}[.)]\s+", r"\1"), (r"(?i)\s?\((?:yes/no|y/n)\)", ""), (r"\b(\d+)\s?x\b", r"\1"),
-    (r"\bhrs?\b", "hours"), (r":\s*,", ","), (r"\s?\buF\b", " microfarad"), (r"(\d)/(\d)", r"\1 by \2"), (r"[‐‑‒–—]", "-"), (r"_", " "), (r"[*#`]+", ""), (r"\s+-\s+", ", ")]]
+    (r"\bhrs?\b", "hours"), (r":\s*,", ","), (r"\s?\buF\b", " microfarad"), (r"(\d)/(\d)", r"\1 by \2"), (r"[‐‑‒–—]", "-"), (r"_", " "), (r"[*#`]+", ""), (r"\s+-\s+", ", "), (r" {2,}", " ")]]
 
 
 def speakable(text: str) -> str:
@@ -289,10 +270,18 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
     spoken: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
         rnd = _Round()
+        buf = ""  # clean speech on whole words: units like "uF" can arrive split across chunks
         async for piece in _stream_round(messages, rnd):
-            piece = speakable(piece)
-            spoken.append(piece)
-            yield piece
+            buf += piece
+            cut = max(buf.rfind(" "), buf.rfind("\n"))
+            if cut > 0:
+                out, buf = speakable(buf[:cut]), buf[cut:]  # keep the space with the next word
+                spoken.append(out)
+                yield out
+        if buf:
+            out = speakable(buf)
+            spoken.append(out)
+            yield out
         content, calls = rnd.content, rnd.calls
         if not calls:
             break

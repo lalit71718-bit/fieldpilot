@@ -58,7 +58,7 @@ def get_ticket(ticket_id: str) -> dict:
 
 def search_manual(query: str) -> dict:
     """Search the equipment service manuals (RAG)."""
-    hits = rag.search(query, k=3)
+    hits = [{"section": h["section"], "text": h["text"]} for h in rag.search(query, k=2)]
     db.log("knowledge", "Searched manuals", query)
     return {"results": hits} if hits else {"results": [], "note": "Nothing relevant found."}
 
@@ -262,11 +262,19 @@ def _send_supervisor(message: str, ticket_id: str, urgent: bool) -> dict:
             "to": tech.get("supervisor_name")}
 
 
+TIME_WORDS = ("tomorrow", "today", "morning", "afternoon", "evening", "noon", "monday",
+              "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "next week",
+              "o'clock", "thirty", "ten", "eleven", "twelve", "nine", "eight", "kal", "am", "pm")
+
+
 def schedule_followup(ticket_id: str, when: str, purpose: str) -> dict:
     """Schedule (or move) the revisit for a ticket. `when` is LOCAL time, e.g. 2026-11-21T10:30."""
     t = _ticket_or_error(ticket_id)
     if not t:
         return {"error": f"Ticket {ticket_id} not found."}
+    said = db.recall("last_user_text").lower()
+    if said and not any(w in said for w in TIME_WORDS) and not any(c.isdigit() for c in said):
+        return {"error": "The technician has not said a time. Ask when they will come back."}
     try:
         dt = datetime.fromisoformat(when.strip().replace("Z", "+00:00"))
     except ValueError:
