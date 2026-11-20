@@ -49,7 +49,8 @@ HOW YOU WORK
   confirm_action with approved=true. If they say no or change their mind, approved=false.
   If LIVE CONTEXT shows a pending confirmation and the technician says yes / go ahead / order
   it, call confirm_action with that id directly. Do not prepare the same action again.
-- After real actions, keep systems in sync with a short ticket note.
+- confirm_action already updates the ticket (status and note) for orders: don't add another
+  note for the same thing. Add a ticket note only for new findings.
 - WRAP-UP: when the technician is finishing, do all that apply, each with its own tool call:
   schedule_followup (if a revisit time is mentioned or a part is on order),
   generate_service_report, notify_supervisor (one-line status). Then recap in one sentence.
@@ -114,6 +115,30 @@ def _cool(model: str, e: Exception) -> None:
         _cooldown[model] = time.time() + min(wait + 1, 3600)
 
 
+# Gemini 3 requires a "thought signature" on every replayed function call. Calls made by
+# another provider (fallback mid-turn) have none, so Google's documented placeholder is used.
+DUMMY_SIGNATURE = "skip_thought_signature_validator"
+
+
+def _for_provider(messages: list[dict], client) -> list[dict]:
+    gemini = "googleapis" in str(getattr(client, "base_url", ""))
+    out = []
+    for m in messages:
+        if m.get("tool_calls"):
+            calls = []
+            for tc in m["tool_calls"]:
+                tc = {k: v for k, v in tc.items() if k != "extra_content"}
+                if gemini:
+                    extra = next((o.get("extra_content") for o in m["tool_calls"]
+                                  if o["id"] == tc["id"] and o.get("extra_content")), None)
+                    tc["extra_content"] = extra or {
+                        "google": {"thought_signature": DUMMY_SIGNATURE}}
+                calls.append(tc)
+            m = {**m, "tool_calls": calls}
+        out.append(m)
+    return out
+
+
 class _Round:
     def __init__(self):
         self.content = ""
@@ -130,7 +155,7 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
         for client, model in targets:
             try:
                 stream = await client.chat.completions.create(
-                    model=model, messages=messages, tools=tools.openai_tools(),
+                    model=model, messages=_for_provider(messages, client), tools=tools.openai_tools(),
                     tool_choice="auto", temperature=0.3, max_tokens=500, stream=True)
                 async for chunk in stream:
                     if not chunk.choices:
@@ -151,6 +176,9 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
                         if tc.function:
                             slot["name"] += tc.function.name or ""
                             slot["args"] += tc.function.arguments or ""
+                        extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
+                        if extra:
+                            slot["extra"] = extra
                 bad = [c["name"] for c in rnd.calls.values() if c["name"] not in tools.TOOLS]
                 if bad and not rnd.content:
                     raise ValueError(f"invented tool {bad}")
@@ -170,7 +198,7 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
 
 _SPOKEN = [(re.compile(p), r) for p, r in [
     (r"\s?[µμ]F", " microfarad"), (r"[µμ]", " micro"), (r"\s?°\s?C", " degrees"), (r"₹\s?", "rupees "),
-    (r"\s?\buF\b", " microfarad"), (r"(\d)/(\d)", r"\1 by \2"), (r"[‐‑‒–—]", "-"), (r"[*#`_]+", ""), (r"\s+-\s+", ", ")]]
+    (r"\s?\buF\b", " microfarad"), (r"(\d)/(\d)", r"\1 by \2"), (r"[‐‑‒–—]", "-"), (r"_", " "), (r"[*#`]+", ""), (r"\s+-\s+", ", ")]]
 
 
 def speakable(text: str) -> str:
@@ -273,7 +301,8 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
             said_filler = True
         messages.append({"role": "assistant", "content": content or None, "tool_calls": [
             {"id": c["id"] or f"call_{i}", "type": "function",
-             "function": {"name": c["name"], "arguments": c["args"] or "{}"}}
+             "function": {"name": c["name"], "arguments": c["args"] or "{}"},
+             **({"extra_content": c["extra"]} if c.get("extra") else {})}
             for i, c in sorted(calls.items())]})
         for i, c in sorted(calls.items()):
             result = tools.call(c["name"], c["args"])

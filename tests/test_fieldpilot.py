@@ -213,3 +213,17 @@ def test_dead_and_throttled_models_are_skipped(monkeypatch):
         c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
     assert seen == ["gone"]  # second turn skipped the dead model
     brain._cooldown.clear()
+
+
+def test_gemini_gets_thought_signatures_and_groq_does_not():
+    from types import SimpleNamespace
+    hist = [{"role": "assistant", "content": None, "tool_calls": [
+        {"id": "a", "type": "function", "function": {"name": "get_my_tickets", "arguments": "{}"}},
+        {"id": "b", "type": "function", "function": {"name": "get_ticket", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "REAL"}}}]}]
+    gem = brain._for_provider(hist, SimpleNamespace(base_url="https://generativelanguage.googleapis.com/v1beta/openai/"))
+    sigs = [tc["extra_content"]["google"]["thought_signature"] for tc in gem[0]["tool_calls"]]
+    assert sigs == [brain.DUMMY_SIGNATURE, "REAL"]
+    groq = brain._for_provider(hist, SimpleNamespace(base_url="https://api.groq.com/openai/v1"))
+    assert all("extra_content" not in tc for tc in groq[0]["tool_calls"])
+    assert brain.speakable("status waiting_for_parts") == "status waiting for parts"
