@@ -6,7 +6,7 @@
   <title>HomePilot Family Call</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.22.0/AgoraRTC_N-production.js"></script>
+  <script src="vendor/AgoraRTC_N-4.22.0.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -26,7 +26,11 @@
         <button id="join" class="big">Join call</button>
         <button id="mute" class="ghost big hidden">Mute</button>
       </div>
+      <div id="no-call" class="setup hidden">Anika isn’t in a call right now. You can still join; you’ll hear her as soon as she starts one.</div>
+      <button id="unmute-audio" class="big hidden">🔊 Tap to turn on sound</button>
+      <div class="meter-row hidden" id="meter-row"><span class="muted">Your mic</span><div class="meter"><span id="meter"></span></div></div>
       <p id="who" class="muted"></p>
+      <p id="err" class="err hidden"></p>
     </div>
   </main>
 <script>
@@ -46,13 +50,44 @@ async function loadJob() {
     <div class="kv">${next.map((e) => `<span>${esc(e.start_at.slice(11, 16))} <b>${esc(e.title)}</b></span>`).join("")}</div>`;
   $("insight").classList.toggle("hidden", !s.insight);
   if (s.insight) $("insight").innerHTML = `<b>Repeat fault: ${esc(s.insight.code)} &times;${s.insight.previous + 1}</b> · ${esc(s.insight.likely_root_cause)}`;
+  callActive = !!s.call_active;
+  $("no-call").classList.toggle("hidden", callActive || others.size > 0);
 }
 
+let callActive = false;
 function updateWho() {
-  $("who").textContent = rtc ? `In the call with ${others.size} other participant(s): Anika and the HomePilot assistant.` : "";
+  const n = others.size;
+  $("who").textContent = !rtc ? "" : n === 0
+    ? "You’re in the call. Waiting for Anika and HomePilot to join…"
+    : `In the call with ${n} other participant${n > 1 ? "s" : ""} (Anika and the HomePilot assistant).`;
+}
+function friendly(e) {
+  const code = (e && (e.code || e.name)) || "";
+  if (/PERMISSION_DENIED|NotAllowed/i.test(code + e.message)) return "Microphone blocked. Allow the microphone for this site in your browser settings, then tap Join again. You can still listen.";
+  if (/NOT_READABLE|NotReadable|DEVICE_NOT_FOUND|NotFound/i.test(code + e.message)) return "No microphone available (another app may be using it). You can still listen.";
+  if (/UID_CONFLICT/i.test(code)) return "You’re already in this call in another tab. Close it and try again.";
+  if (/GATEWAY|NETWORK|WS_ABORT|timeout/i.test(code + e.message)) return "Can’t reach the call service. Check your internet connection and try again.";
+  if (/INVALID|TOKEN|dynamic key/i.test(code + e.message)) return "The call link is out of date. Ask Anika to send a fresh one.";
+  return `Could not join: ${e.message || code}`;
+}
+function showErr(msg) { $("err").textContent = msg; $("err").classList.toggle("hidden", !msg); }
+
+// Phones often block audio that starts without a tap: offer a button instead of silence.
+if (window.AgoraRTC) AgoraRTC.onAutoplayFailed = () => $("unmute-audio").classList.remove("hidden");
+$("unmute-audio").onclick = () => {
+  if (rtc) rtc.remoteUsers.forEach((u) => u.audioTrack && u.audioTrack.play());
+  $("unmute-audio").classList.add("hidden");
+};
+
+function meterLoop() {
+  if (!mic) { $("meter-row").classList.add("hidden"); return; }
+  $("meter-row").classList.remove("hidden");
+  $("meter").style.width = `${Math.min(100, mic.getVolumeLevel() * 160)}%`;
+  requestAnimationFrame(meterLoop);
 }
 
 $("join").onclick = async () => {
+  showErr("");
   if (rtc) { // leave
     if (mic) { mic.close(); mic = null; }
     await rtc.leave(); rtc = null; others.clear();
@@ -60,20 +95,31 @@ $("join").onclick = async () => {
     $("status").textContent = "Not in call"; $("status").classList.remove("on"); updateWho(); return;
   }
   try {
-    $("join").disabled = true; $("status").textContent = "Joining...";
+    $("join").disabled = true; $("status").textContent = "Joining…";
     const cfg = await (await fetch("/api/config")).json();
+    if (!window.AgoraRTC) throw new Error("The call library didn’t load. Refresh the page.");
+    if (!cfg.app_id) throw new Error("Voice isn’t configured on the server yet.");
     rtc = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
     rtc.on("user-joined", (u) => { others.add(u.uid); updateWho(); });
     rtc.on("user-left", (u) => { others.delete(u.uid); updateWho(); });
-    rtc.on("user-published", async (u, type) => { await rtc.subscribe(u, type); if (type === "audio") u.audioTrack.play(); });
+    rtc.on("user-published", async (u, type) => {
+      await rtc.subscribe(u, type);
+      if (type === "audio") u.audioTrack.play();
+    });
     await rtc.join(cfg.app_id, cfg.channel, cfg.token, cfg.uid);
-    mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true });
-    await rtc.publish([mic]);
     rtc.remoteUsers.forEach((u) => others.add(u.uid));
-    $("join").textContent = "Leave call"; $("mute").classList.remove("hidden");
+    $("join").textContent = "Leave call";
     $("status").textContent = "In call"; $("status").classList.add("on"); updateWho();
+    try {  // a blocked mic shouldn't stop them from listening
+      mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true });
+      await rtc.publish([mic]);
+      $("mute").classList.remove("hidden");
+      meterLoop();
+    } catch (e) { showErr(friendly(e)); }
   } catch (e) {
-    $("status").textContent = "Could not join"; $("who").textContent = e.message; rtc = null;
+    showErr(friendly(e)); $("status").textContent = "Could not join";
+    try { if (rtc) await rtc.leave(); } catch {}
+    rtc = null;
   } finally { $("join").disabled = false; }
 };
 

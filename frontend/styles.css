@@ -150,3 +150,9 @@ tr.new-row td{color:var(--accent)}
 .alarm-btns button{padding:11px 20px;font-size:15px}
 .alarm-icon{animation:shake 1s ease-in-out infinite}
 @keyframes shake{0%,100%{transform:rotate(0)}20%{transform:rotate(-12deg)}40%{transform:rotate(10deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(4deg)}}
+
+.meter-row{display:flex;align-items:center;gap:10px;margin-top:12px}
+.meter{flex:1;height:8px;border-radius:6px;background:var(--panel2);overflow:hidden;border:1px solid var(--line)}
+.meter span{display:block;height:100%;width:0;background:var(--ok);transition:width .08s}
+.err{color:var(--bad);margin-top:10px}
+#unmute-audio{margin-top:12px}

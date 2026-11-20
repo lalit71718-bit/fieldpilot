@@ -121,6 +121,7 @@ def state():
                          "ORDER BY id DESC LIMIT 120"),
         "insight": tools.fault_insight(active) if active else None,
         "expert_called": bool(db.recall("expert_call")),
+        "call_active": bool(agora._state.get("agent_id")),
         "now": db.iso(db.now()),
     }
 

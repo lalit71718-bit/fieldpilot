@@ -93,6 +93,12 @@ function setChip(id, text, on) { const el = $(id); el.textContent = text; el.cla
 function setStatus(main, hint) { $("call-status").textContent = main; if (hint !== undefined) $("call-hint").textContent = hint; }
 
 // ------------------------------------------------------------------ voice (Agora)
+// Browsers can block call audio that starts without a click: offer a one-tap fix.
+if (window.AgoraRTC) AgoraRTC.onAutoplayFailed = () => {
+  setStatus("Tap anywhere to turn on sound", "");
+  document.addEventListener("click", () => { if (rtc) rtc.remoteUsers.forEach((u) => u.audioTrack && u.audioTrack.play()); }, { once: true });
+};
+
 async function startVoice() {
   cfg = await api("/api/config");
   if (cfg.missing.length) {
