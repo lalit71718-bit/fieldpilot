@@ -170,3 +170,7 @@ tr.new-row td{color:var(--accent)}
 .invite-list li.joined{color:var(--ok)}
 .name-row{display:flex;flex-direction:column;gap:6px;margin:10px 0 14px;font:600 12px "JetBrains Mono",monospace;color:var(--muted)}
 .name-row input{font:16px "Inter Tight",sans-serif;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text)}
+
+.mute-btn{margin-top:8px;padding:6px 12px;font-size:12px}
+.mute-btn.on-mute{background:var(--accent);color:#FFF6EF;border-color:var(--accent)}
+.tip{font-size:13px;margin-top:10px}

@@ -117,6 +117,7 @@ async function startVoice() {
   rtc.on("user-left", (u) => { remoteUsers.delete(u.uid); if (!remoteUsers.size) setChip("chip-agent", "Assistant: left", false); });
   await rtc.join(cfg.app_id, cfg.channel, cfg.token, cfg.uid);
   mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true });
+  $("mute-btn").classList.remove("hidden");
   await rtc.publish([mic]);
   setChip("chip-rtc", "Voice: live", true);
   live = true; $("mic").classList.add("live");
@@ -132,6 +133,7 @@ async function stopVoice() {
   await api("/api/agent/stop", { method: "POST" }).catch(() => {});
   if (mic) { mic.stop(); mic.close(); mic = null; }
   if (rtc) { await rtc.leave(); rtc = null; }
+  micMuted = false; $("mute-btn").classList.add("hidden"); $("mute-btn").textContent = "Mute mic";
   setChip("chip-rtc", "Voice: offline", false); setChip("chip-agent", "Assistant: idle", false);
   setStatus("Session ended", "Tap to start again");
 }
@@ -179,6 +181,15 @@ $("text-form").onsubmit = async (ev) => {
   refresh();
 };
 
+let micMuted = false;
+$("mute-btn").onclick = async () => {
+  if (!mic) return;
+  micMuted = !micMuted;
+  await mic.setEnabled(!micMuted);
+  $("mute-btn").textContent = micMuted ? "Unmute mic" : "Mute mic";
+  $("mute-btn").setAttribute("aria-pressed", micMuted);
+  $("mute-btn").classList.toggle("on-mute", micMuted);
+};
 $("alarm-ok").onclick = () => stopAlarm("done");
 $("invite-copy").onclick = async () => { try { await navigator.clipboard.writeText($("invite-link").value); $("invite-copy").textContent = "Copied"; setTimeout(() => ($("invite-copy").textContent = "Copy link"), 1500); } catch { $("invite-link").select(); } };
 $("invite-close").onclick = () => { $("invite").dataset.hidden = lastInviteAt; $("invite").classList.add("hidden"); };
