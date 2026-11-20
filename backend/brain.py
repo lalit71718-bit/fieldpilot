@@ -198,7 +198,7 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
 
 _SPOKEN = [(re.compile(p), r) for p, r in [
     (r"\s?[µμ]F", " microfarad"), (r"[µμ]", " micro"), (r"\s?°\s?C", " degrees"), (r"₹\s?", "rupees "),
-    (r"(?m)(^|\s)\d{1,2}[.)]\s+", r"\1"), (r"\((?:yes/no|y/n)\)", ""), (r"\b(\d+)\s?x\b", r"\1"),
+    (r"(?m)(^|\s)\d{1,2}[.)]\s+", r"\1"), (r"(?i)\s?\((?:yes/no|y/n)\)", ""), (r"\b(\d+)\s?x\b", r"\1"),
     (r"\bhrs?\b", "hours"), (r":\s*,", ","), (r"\s?\buF\b", " microfarad"), (r"(\d)/(\d)", r"\1 by \2"), (r"[‐‑‒–—]", "-"), (r"_", " "), (r"[*#`]+", ""), (r"\s+-\s+", ", ")]]
 
 
