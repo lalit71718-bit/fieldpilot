@@ -129,7 +129,7 @@ async def diag():
             results.append({"model": model, "ok": True, "secs": round(time.time() - t, 2),
                             "reply": (r.choices[0].message.content or "")[:60]})
         except Exception as e:
-            results.append({"model": model, "ok": False, "error": str(e)[:400]})
+            results.append({"model": model, "ok": False, "error": brain._err(e)})
     out["llm"] = results
     # 2. Can the public tunnel reach this server?
     if config.PUBLIC_BASE_URL:

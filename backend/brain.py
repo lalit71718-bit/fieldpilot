@@ -83,6 +83,18 @@ def _targets() -> list[tuple[AsyncOpenAI, str]]:
     return out
 
 
+def _err(e: Exception) -> str:
+    """Full provider error text (Gemini's error bodies are not parsed by the SDK)."""
+    resp = getattr(e, "response", None)
+    detail = ""
+    if resp is not None:
+        try:
+            detail = resp.text
+        except Exception:
+            detail = ""
+    return f"{e} {detail}".strip()[:400]
+
+
 class _Round:
     def __init__(self):
         self.content = ""
@@ -129,7 +141,7 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
                 last = e
                 rnd.calls.clear()
                 reason = "rate-limited" if isinstance(e, RateLimitError) else "failed"
-                db.log("system", f"{model} {reason}, trying next model", str(e)[:160])
+                db.log("system", f"{model} {reason}, trying next model", _err(e))
         if attempt == 0:
             await asyncio.sleep(3)  # everything throttled: wait once for the per-minute window
     raise last or RuntimeError("No LLM model available")
@@ -267,7 +279,7 @@ async def sse_stream(incoming: list[dict], model: str) -> AsyncIterator[str]:
         async for piece in run_turn(incoming):
             yield sse_chunk(cid, model, {"content": piece})
     except Exception as e:  # speak a graceful error instead of going silent
-        db.log("error", "Brain error", str(e)[:300])
+        db.log("error", "Brain error", _err(e))
         yield sse_chunk(cid, model, {"content": "Sorry, I hit a problem reaching our systems. "
                                                 "Please try again."})
     yield sse_chunk(cid, model, {}, "stop")
