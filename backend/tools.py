@@ -293,8 +293,14 @@ def generate_service_report(ticket_id: str, findings: str, actions_taken: str,
 # ---------------------------------------------------------------- registry
 
 def _s(desc: str, props: dict | None = None, required: list[str] | None = None) -> dict:
-    return {"description": desc, "parameters": {
-        "type": "object", "properties": props or {}, "required": required or []}}
+    # Gemini rejects an object schema with empty "properties", so tools without arguments
+    # get no "parameters" at all (valid for every OpenAI-compatible provider).
+    if not props:
+        return {"description": desc}
+    schema = {"type": "object", "properties": props}
+    if required:
+        schema["required"] = required
+    return {"description": desc, "parameters": schema}
 
 
 STR = {"type": "string"}
