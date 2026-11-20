@@ -267,7 +267,27 @@ def build_messages(incoming: list[dict]) -> list[dict]:
     # Drop our own error/apology turns so one failure doesn't derail the rest of the call.
     convo = [m for m in convo if m["content"] and not (
         m["role"] == "assistant" and any(k in m["content"].lower() for k in ERROR_MARKERS))]
-    convo = convo[-MAX_HISTORY:]
+    # Merge consecutive turns from the same speaker. Agora can resend a growing sentence
+    # ("Yes." -> "Yes. I'm good." -> ...): keep the longest version instead of all of them.
+    merged: list[dict] = []
+    for m in convo:
+        if merged and merged[-1]["role"] == m["role"]:
+            prev = merged[-1]["content"]
+            if m["content"].startswith(prev[: max(1, len(prev) - 2)]):
+                merged[-1] = m
+            elif not prev.startswith(m["content"]):
+                merged[-1] = {"role": m["role"], "content": prev + " " + m["content"]}
+        else:
+            merged.append(m)
+    # The conversation must end with the user (Gemini rejects a request ending with a model
+    # turn, and Agora sometimes sends the assistant's last line after the user's).
+    while merged and merged[-1]["role"] == "assistant":
+        merged.pop()
+    if not merged:
+        merged = [{"role": "user", "content": "(The user is waiting. Continue helpfully.)"}]
+    convo = merged[-MAX_HISTORY:]
+    while convo and convo[0]["role"] == "assistant":
+        convo = convo[1:]
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": "LIVE CONTEXT (from enterprise systems):\n"
                                           + live_context()}] + convo

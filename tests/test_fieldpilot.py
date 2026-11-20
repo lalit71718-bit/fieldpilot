@@ -111,7 +111,7 @@ def test_error_turns_are_dropped_from_history():
         {"role": "user", "content": "first job?"},
         {"role": "assistant", "content": "Sorry, I lost connection to our systems for a moment."},
         {"role": "user", "content": "try again"}])
-    assert [m["content"] for m in msgs[2:]] == ["first job?", "try again"]
+    assert [m["content"] for m in msgs[2:]] == ["first job? try again"]  # merged, no error turn
 
 
 def test_tool_calls_without_index(monkeypatch):
@@ -407,3 +407,22 @@ def test_invite_guests_by_name_not_numbers_and_join_status():
     who = {i["who"]: i["joined"] for i in st["invites"]}
     assert who["Kabir"] is True and who["Rohan"] is False and "Priya" in who
     assert any(a["title"] == "Kabir joined the call" for a in st["activity"])
+
+
+def test_history_ends_with_user_and_growing_sentences_merge():
+    msgs = brain.build_messages([
+        {"role": "assistant", "content": "Hi!"},
+        {"role": "user", "content": "Yes."},
+        {"role": "user", "content": "Yes. I'm good."},
+        {"role": "user", "content": "Yes. I'm good. What about you?"},
+        {"role": "assistant", "content": "I'm here."}])
+    convo = msgs[2:]
+    assert convo == [{"role": "user", "content": "Yes. I'm good. What about you?"}]
+
+
+def test_unexpected_joiner_is_listed():
+    c = TestClient(app)
+    tools.call("call_family_member", {"member": "Rohan"})
+    c.post("/api/joined", json={"name": "Lalit Kumar Singh"})
+    who = {i["who"]: i["joined"] for i in c.get("/api/state").json()["invites"]}
+    assert who == {"Rohan": False, "Lalit Kumar Singh": True}

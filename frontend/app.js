@@ -269,7 +269,8 @@ function render(s) {
   lastInviteAt = invs.length ? invs[invs.length - 1].at : "";
   if (invs.length && card.dataset.hidden !== lastInviteAt) {
     card.classList.remove("hidden");
-    const general = invs[0].link.split("?")[0];
+    const withLink = invs.find((i) => i.link) || invs[0];
+    const general = (withLink.link || location.origin + "/expert.html").split("?")[0];
     if (card.dataset.link !== general) {
       card.dataset.link = general;
       $("invite-link").value = general;

@@ -212,10 +212,14 @@ async def joined(request: Request):
     name = str(body.get("name") or "A family member")[:40]
     left = bool(body.get("left"))
     invites = json.loads(db.recall("invites") or "[]")
-    for inv in invites:
-        if inv["who"].lower() == name.lower():
+    match = [inv for inv in invites if inv["who"].lower() == name.lower()]
+    if match:
+        for inv in match:
             inv["joined"] = not left
-    db.remember("invites", json.dumps(invites))
+    elif not left:  # someone joined from the QR / link under another name: show them too
+        invites.append({"who": name, "link": "", "at": db.iso(db.now()), "joined": True,
+                        "guest": True})
+    db.remember("invites", json.dumps(invites[-8:]))
     db.log("call", f"{name} {'left' if left else 'joined'} the call")
     return {"ok": True}
 
