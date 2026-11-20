@@ -174,3 +174,20 @@ tr.new-row td{color:var(--accent)}
 .mute-btn{margin-top:8px;padding:6px 12px;font-size:12px}
 .mute-btn.on-mute{background:var(--accent);color:#FFF6EF;border-color:var(--accent)}
 .tip{font-size:13px;margin-top:10px}
+
+/* shopping list (phone page + dashboard) */
+.list-page .list-wrap{max-width:560px;margin:0 auto;padding:18px 16px 40px;display:flex;flex-direction:column;gap:14px}
+.list-title{font:400 40px/1.05 "Instrument Serif",Georgia,serif;margin:6px 0 0}
+.shop-list{list-style:none;padding:0;margin:8px 0 0}
+.shop-list li{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);font-size:17px}
+.shop-list.done li span{color:var(--muted);text-decoration:line-through}
+.tick{width:28px;height:28px;flex:none;border-radius:8px;border:2px solid var(--muted);background:transparent;color:#fff;font-size:15px;padding:0;display:grid;place-items:center;cursor:pointer}
+.tick.on{background:var(--ok);border-color:var(--ok)}
+.tick:disabled{opacity:.6;cursor:default}
+.all-done{font:400 26px "Instrument Serif",Georgia,serif;color:var(--ok);text-align:center}
+.shop-dash li{padding:7px 0;font-size:14px}
+.shop-dash .tick{width:22px;height:22px;font-size:12px;border-radius:6px}
+.shop-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.shop-foot a{font:12px "JetBrains Mono",monospace;color:var(--accent)}
+.tick,.tick:hover{background:transparent}
+.tick.on,.tick.on:hover{background:var(--ok)}

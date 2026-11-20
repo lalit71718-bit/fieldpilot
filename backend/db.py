@@ -17,6 +17,8 @@ CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, member TE
 CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, assignee TEXT, due_at TEXT,
     status TEXT, created_at TEXT, done_at TEXT);
 CREATE TABLE shopping (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, note TEXT,
+    status TEXT, created_at TEXT, bought_by TEXT, bought_at TEXT);
+CREATE TABLE grocery_orders (id TEXT PRIMARY KEY, items TEXT, total INTEGER, slot_at TEXT,
     status TEXT, created_at TEXT);
 CREATE TABLE appliances (id TEXT PRIMARY KEY, name TEXT, model TEXT, room TEXT,
     installed_on TEXT, warranty_until TEXT);
@@ -145,8 +147,9 @@ def conn() -> sqlite3.Connection:
         _conn = connect()
         exists = _conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='members'").fetchone()
-        if not exists:
-            reset_db()
+        cols = {r[1] for r in _conn.execute("PRAGMA table_info(shopping)").fetchall()}
+        if not exists or "bought_by" not in cols:
+            reset_db()  # older database layout: start fresh with the current demo data
     return _conn
 
 

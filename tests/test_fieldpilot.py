@@ -426,3 +426,40 @@ def test_unexpected_joiner_is_listed():
     c.post("/api/joined", json={"name": "Lalit Kumar Singh"})
     who = {i["who"]: i["joined"] for i in c.get("/api/state").json()["invites"]}
     assert who == {"Rohan": False, "Lalit Kumar Singh": True}
+
+
+def test_shopping_lifecycle_bought_auto_closes_pickup():
+    tools.call("add_to_shopping_list", {"items": ["milk", "paneer"]})
+    t = tools.call("assign_task", {"title": "Pick up milk and paneer", "assignee": "Rohan"})
+    assert t["status"] == "assigned"
+    assert "/list.html?name=Rohan" in db.q("SELECT message FROM notifications")[-1]["message"]
+    st = tools.call("shopping_status", {})
+    assert st["estimated_total_inr"] == 60 + 90 + 60  # milk + paneer + bananas (seeded)
+    assert tools.call("remove_from_shopping_list", {"items": ["bananas"]})["removed"] == ["Bananas"]
+    r = tools.call("mark_bought", {"items": ["milk"], "by": "Rohan"})
+    assert r["bought"] == ["Milk"] and r["still_to_buy"] == ["Paneer"]
+    # ticking the last item from the phone page closes Rohan's pickup task automatically
+    pid = db.one("SELECT id FROM shopping WHERE item='Paneer'")["id"]
+    out = TestClient(app).post("/api/shopping/toggle", json={"id": pid, "by": "Rohan"}).json()
+    assert out.get("task_completed") == "Pick up milk and paneer"
+    assert db.one("SELECT status FROM tasks WHERE title='Pick up milk and paneer'")["status"] == "done"
+
+
+def test_grocery_order_needs_yes_avoids_calendar_and_closes_pickup():
+    tools.call("add_to_shopping_list", {"items": ["milk", "paneer"]})
+    tools.call("assign_task", {"title": "Pick up milk, paneer and bananas", "assignee": "Rohan"})
+    p = tools.call("order_groceries", {})
+    assert p["status"] == "awaiting_confirmation" and db.q("SELECT * FROM grocery_orders") == []
+    db.remember("last_user_text", "yes order it")
+    done = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert done["status"] == "done" and done["order_id"].startswith("GR-")
+    order = db.one("SELECT * FROM grocery_orders")
+    from datetime import datetime
+    slot = datetime.fromisoformat(order["slot_at"])
+    assert tools._clashes(slot, 30) == [e for e in tools._clashes(slot, 30) if "Grocery" in e["title"]]
+    assert 8 <= slot.hour < 20
+    assert db.q("SELECT * FROM shopping WHERE status='needed'") == []
+    assert db.one("SELECT status FROM tasks WHERE title LIKE 'Pick up milk%'")["status"] == "done"
+    assert "no need to stop at the shop" in db.q("SELECT message FROM notifications")[-1]["message"]
+    again = tools.call("order_groceries", {})
+    assert again.get("status") == "already_ordered" or "error" in again

@@ -42,13 +42,16 @@ FACTS
 - Respect the family's preferences (vegetarian, budget, quiet hours, Dadi's medicine).
 
 ACTIONS
-- book_service and urgent alerts return awaiting_confirmation: nothing has happened yet. Ask a
+- book_service, order_groceries and urgent alerts return awaiting_confirmation: nothing has happened yet. Ask a
   clear yes/no question. On yes call confirm_action(approved=true) with the pending id from
   LIVE CONTEXT; on no / don't / wait / cancel use approved=false.
 - Never say something was done unless a tool returned success. One tool call per requested
   action. Don't write an answer in the same message as tool calls. A done booking is done:
   thanks / okay are not new bookings.
-- Shopping: add_to_shopping_list. Chores: assign_task (it notifies the person). "X did it":
+- Shopping: add_to_shopping_list; "X bought the milk": mark_bought; "take it off the list":
+  remove_from_shopping_list; "what's left / how much": shopping_status; "just order it":
+  order_groceries = home delivery from the family's store (needs a yes, like bookings). Quote
+  totals only from shopping_status or LIVE CONTEXT; never estimate prices yourself. Chores: assign_task (it notifies the person). "X did it":
   complete_task. Medicine or other nudges: set_reminder (only a time the user said; ask if
   not). Calendar: add_event. "Get Rohan / my friend Priya on the call": call_family_member (it sends a join link; you
   never phone anyone).
@@ -62,7 +65,7 @@ ACTIONS
   with a chime, you say it out loud in the call, and it is posted to the family channel.
   There is no separate app, swipe or delete button. Never invent screens or features.
 - You CANNOT: book hotels or travel, make phone calls or dial numbers, cancel a
-  sent message or invitation, or order online. To remember something (a birthday, a
+  sent message or invitation, or shop on other websites. To remember something (a birthday, a
   preference, a number), use remember_fact; only then may you say it is saved. Say so in one sentence
   and offer a real alternative (a reminder, a task or a shopping item). Never say you "noted" or "saved" something unless a tool did it.
 - send_family_update is ONLY for when the user asks you to tell / message the family. Never
@@ -225,6 +228,10 @@ def live_context() -> str:
                                    for m in db.q("SELECT * FROM members")) + ".",
              "Preferences: " + "; ".join(f"{h['key']}: {h['value']}"
                                         for h in db.q("SELECT * FROM household")) + "."]
+    shop = tools.shopping_status()
+    lines.append("Shopping list: " + (", ".join(shop["to_buy"]) if shop["to_buy"] else "empty")
+                 + (f" (estimated total {shop['estimated_total_inr']} rupees)" if shop["to_buy"] else "")
+                 + (". Bought: " + ", ".join(shop["bought"]) if shop["bought"] else "") + ".")
     facts = tools.recall_facts()
     if facts:
         lines.append("Remembered for the family: " + "; ".join(facts) + ".")
@@ -302,6 +309,10 @@ FILLERS = {
     "confirm_action": "Done, one second.",
     "add_event": "Adding it to the calendar.",
     "add_to_shopping_list": "Adding that.",
+    "mark_bought": "Ticking that off.",
+    "remove_from_shopping_list": "Taking that off the list.",
+    "shopping_status": "Checking the list.",
+    "order_groceries": "Putting the order together.",
     "assign_task": "Sending that over.",
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",

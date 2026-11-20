@@ -109,7 +109,10 @@ def state():
         "household": db.q("SELECT * FROM household"),
         "events": db.q("SELECT * FROM events ORDER BY start_at"),
         "tasks": db.q("SELECT * FROM tasks ORDER BY status DESC, due_at"),
-        "shopping": db.q("SELECT * FROM shopping WHERE status='needed' ORDER BY id"),
+        "shopping": db.q("SELECT * FROM shopping WHERE status IN ('needed','bought','ordered') "
+                         "ORDER BY status DESC, id"),
+        "shopping_total": tools.shopping_status()["estimated_total_inr"],
+        "grocery_orders": db.q("SELECT * FROM grocery_orders ORDER BY created_at DESC"),
         "appliance": db.one("SELECT * FROM appliances WHERE id=?", (active,)) if active else None,
         "history": db.q("SELECT * FROM appliance_history WHERE appliance_id=? ORDER BY date DESC",
                         (active,)) if active else [],
@@ -222,6 +225,21 @@ async def joined(request: Request):
     db.remember("invites", json.dumps(invites[-8:]))
     db.log("call", f"{name} {'left' if left else 'joined'} the call")
     return {"ok": True}
+
+
+@app.post("/api/shopping/toggle")
+async def shopping_toggle(request: Request):
+    """Tick or untick an item from the phone list or the dashboard."""
+    body = await request.json()
+    row = db.one("SELECT * FROM shopping WHERE id=?", (int(body.get("id", 0)),))
+    if not row or row["status"] not in ("needed", "bought"):
+        raise HTTPException(404, "No such item")
+    by = str(body.get("by") or "")[:30]
+    if row["status"] == "needed":
+        return tools.mark_bought([row["item"]], by)
+    db.run("UPDATE shopping SET status='needed', bought_by=NULL, bought_at=NULL WHERE id=?", (row["id"],))
+    db.log("shopping", "Back on the list", row["item"])
+    return {"status": "unticked", "item": row["item"]}
 
 
 @app.get("/healthz")

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomePilot · Shopping list</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="list-page">
+  <header class="topbar">
+    <div class="brand"><span class="logo">HP</span> homepilot <small>shopping list</small></div>
+    <div class="chips"><span id="sync" class="chip on">Live</span></div>
+  </header>
+  <main class="list-wrap">
+    <h1 id="hello" class="list-title">Shopping list</h1>
+    <p class="muted" id="store">Tick items as you put them in the basket. Anika sees it instantly.</p>
+    <div class="card">
+      <div class="card-head"><h3>To buy</h3><span id="total" class="pill">-</span></div>
+      <ul id="todo" class="shop-list"></ul>
+    </div>
+    <div class="card">
+      <h3>In the basket</h3>
+      <ul id="done" class="shop-list done"></ul>
+    </div>
+    <div id="order" class="card hidden"></div>
+    <p id="all-done" class="all-done hidden">✓ All done. The family has been told.</p>
+  </main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const me = new URLSearchParams(location.search).get("name") || "";
+if (me) $("hello").textContent = `Hi ${me}, here’s the list`;
+let busy = false;
+
+async function load() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    $("sync").textContent = "Live"; $("sync").classList.add("on");
+    const todo = s.shopping.filter((x) => x.status === "needed");
+    const done = s.shopping.filter((x) => x.status !== "needed");
+    $("total").textContent = todo.length ? `about ₹${s.shopping_total}` : "nothing left";
+    $("todo").innerHTML = todo.map((x) => `<li><button class="tick" data-id="${x.id}" aria-label="Mark ${esc(x.item)} as bought"></button><span>${esc(x.item)}</span></li>`).join("")
+      || '<li class="muted">Nothing left to buy.</li>';
+    $("done").innerHTML = done.map((x) => `<li><button class="tick on" data-id="${x.id}" ${x.status === "ordered" ? "disabled" : ""} aria-label="Put ${esc(x.item)} back on the list">✓</button><span>${esc(x.item)} <small class="muted">${x.status === "ordered" ? "ordered online" : x.bought_by ? "· " + esc(x.bought_by) : ""}</small></span></li>`).join("")
+      || '<li class="muted">Nothing yet.</li>';
+    const o = s.grocery_orders[0];
+    $("order").classList.toggle("hidden", !o);
+    if (o) $("order").innerHTML = `<h3>Delivery on its way</h3><p><b>${esc(o.id)}</b> · ₹${o.total} · ${esc(o.slot_at.slice(11, 16))}</p><p class="muted">No need to stop at the shop.</p>`;
+    $("all-done").classList.toggle("hidden", !(done.length && !todo.length));
+    document.querySelectorAll(".tick").forEach((b) => b.onclick = () => toggle(b.dataset.id, b));
+  } catch { $("sync").textContent = "Offline"; $("sync").classList.remove("on"); }
+}
+async function toggle(id, btn) {
+  if (busy) return; busy = true; btn.classList.toggle("on");
+  if (navigator.vibrate) navigator.vibrate(15);
+  await fetch("/api/shopping/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, by: me }) }).catch(() => {});
+  busy = false; load();
+}
+load(); setInterval(load, 2000);
+</script>
+</body>
+</html>

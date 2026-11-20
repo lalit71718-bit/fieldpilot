@@ -328,6 +328,33 @@ def confirm_action(action_id: str, approved: bool) -> dict:
         db.log("calendar", "Added to family calendar", f"{app['name']} repair {_spoken_time(start)}")
         result = {"status": "done", "booking_id": bid, "when": _spoken_time(start),
                   "also_done": "added to the family calendar with a reminder 30 minutes before"}
+    elif a["kind"] == "order_groceries":
+        rows = [db.one("SELECT * FROM shopping WHERE id=?", (i,)) for i in p["ids"]]
+        rows = [r for r in rows if r and r["status"] == "needed"]
+        if not rows:
+            return {"error": "Those items are no longer on the list."}
+        oid = "GR-" + str(3100 + len(db.q("SELECT id FROM grocery_orders")) + 1)
+        start = _dt(p["slot_at"])
+        db.run("INSERT INTO grocery_orders VALUES (?,?,?,?,?,?)",
+               (oid, json.dumps([r["item"] for r in rows]), p["total"], p["slot_at"], "placed",
+                db.iso(db.now())))
+        for r in rows:
+            db.run("UPDATE shopping SET status='ordered', bought_by=?, bought_at=? WHERE id=?",
+                   (oid, db.iso(db.now()), r["id"]))
+        db.run("INSERT INTO events (title,member,start_at,minutes,location,source) VALUES (?,?,?,?,?,?)",
+               (f"Grocery delivery ({oid})", "anika", p["slot_at"], 30, "home", f"order {oid}"))
+        # The pickup errand is no longer needed: close it and tell the person.
+        task = next((t for t in db.q("SELECT * FROM tasks WHERE status='open'")
+                     if any(w in t["title"].lower() for w in ("pick up", "grocer", "buy", "milk"))), None)
+        if task:
+            db.run("UPDATE tasks SET status='done', done_at=? WHERE id=?", (db.iso(db.now()), task["id"]))
+            who = db.one("SELECT name FROM members WHERE id=?", (task["assignee"],))
+            _send_family(f"@{who['name'] if who else task['assignee']}: no need to stop at the shop, "
+                         f"Anika ordered the groceries ({oid}), arriving {_spoken_time(start)}.")
+        db.log("order", f"Grocery order {oid} placed", a["summary"])
+        result = {"status": "done", "order_id": oid, "arriving": _spoken_time(start),
+                  "also_done": "added to the calendar" + ("; pickup task closed and Rohan told"
+                                                         if task else "")}
     elif a["kind"] == "urgent_alert":
         sent = _send_family(p["message"], urgent=True)
         result = {"status": "done", "delivery": sent}
@@ -407,6 +434,121 @@ def add_to_shopping_list(items: list[str], note: str = "") -> dict:
             "store": _household().get("grocery_store")}
 
 
+# Typical prices at the family's store, used for estimates and the demo order (rupees).
+PRICES = {"milk": 60, "paneer": 90, "banana": 60, "bp tablet": 120, "bread": 45, "curd": 40,
+          "butter": 58, "rice": 85, "atta": 70, "dal": 140, "tomato": 40, "onion": 35,
+          "potato": 30, "apple": 160, "egg": 84, "sugar": 50, "tea": 120, "coffee": 190,
+          "oil": 160, "soap": 45, "detergent": 120, "biscuit": 30, "spinach": 30,
+          "coriander": 10, "ghee": 280, "water": 20, "juice": 110, "yogurt": 40}
+
+
+def _price(item: str) -> int | None:
+    words = _canon(item)
+    for key, p in PRICES.items():
+        if set(key.split()) <= words:
+            return p
+    return None
+
+
+def _list_rows(status: str = "needed") -> list[dict]:
+    return db.q("SELECT * FROM shopping WHERE status=? ORDER BY id", (status,))
+
+
+def shopping_status() -> dict:
+    """What's on the list, what's been bought (and by whom), and an estimated total."""
+    needed, bought = _list_rows("needed"), _list_rows("bought")
+    est = [(_price(r["item"]), r["item"]) for r in needed]
+    total = sum(p for p, _ in est if p)
+    unknown = [i for p, i in est if p is None]
+    return {"to_buy": [r["item"] for r in needed],
+            "bought": [f"{r['item']} ({r['bought_by'] or 'someone'})" for r in bought],
+            "estimated_total_inr": total, "no_price_for": unknown,
+            "store": _household().get("grocery_store")}
+
+
+def _match_items(items, rows: list[dict]) -> list[dict]:
+    if isinstance(items, str):
+        if items.strip().lower() in ("all", "everything", "all of it", "the whole list"):
+            return rows
+        items = [i.strip() for i in re.split(r",| and ", items) if i.strip()]
+    out = []
+    for it in items:
+        hit = next((r for r in rows if _similar(it, r["item"], 0.5) or
+                    _canon(it) & _canon(r["item"])), None)
+        if hit and hit not in out:
+            out.append(hit)
+    return out
+
+
+def _close_pickup_if_done(by: str) -> str:
+    """When nothing is left to buy, the open grocery pickup task is completed automatically."""
+    if _list_rows("needed"):
+        return ""
+    task = next((t for t in db.q("SELECT * FROM tasks WHERE status='open'")
+                 if any(w in t["title"].lower() for w in ("pick up", "grocer", "buy", "milk"))), None)
+    if not task:
+        return ""
+    db.run("UPDATE tasks SET status='done', done_at=? WHERE id=?", (db.iso(db.now()), task["id"]))
+    db.log("task", "Task done", f"{task['title']} (all items bought)")
+    _send_family(f"✅ Shopping done{' by ' + by if by else ''}. Everything on the list is bought.")
+    return task["title"]
+
+
+def mark_bought(items, by: str = "") -> dict:
+    """Tick items off the shopping list ('Rohan bought the milk'); 'all' ticks everything."""
+    rows = _list_rows("needed")
+    hit = _match_items(items, rows)
+    if not hit:
+        return {"error": "None of those are on the list.", "to_buy": [r["item"] for r in rows]}
+    m = _member(by) if by else None
+    who = m["name"] if m else (by.title() if by else "")
+    for r in hit:
+        db.run("UPDATE shopping SET status='bought', bought_by=?, bought_at=? WHERE id=?",
+               (who or None, db.iso(db.now()), r["id"]))
+    db.log("shopping", f"Bought{' by ' + who if who else ''}", ", ".join(r["item"] for r in hit))
+    closed = _close_pickup_if_done(who)
+    left = [r["item"] for r in _list_rows("needed")]
+    return {"status": "updated", "bought": [r["item"] for r in hit], "still_to_buy": left,
+            **({"task_completed": closed} if closed else {})}
+
+
+def remove_from_shopping_list(items) -> dict:
+    """Take items off the list without buying them."""
+    hit = _match_items(items, _list_rows("needed"))
+    if not hit:
+        return {"error": "None of those are on the list."}
+    for r in hit:
+        db.run("UPDATE shopping SET status='removed' WHERE id=?", (r["id"],))
+    db.log("shopping", "Removed from list", ", ".join(r["item"] for r in hit))
+    return {"status": "removed", "removed": [r["item"] for r in hit],
+            "still_to_buy": [r["item"] for r in _list_rows("needed")]}
+
+
+def order_groceries() -> dict:
+    """Prepare a home-delivery order for everything on the list (demo store). Needs a yes."""
+    rows = _list_rows("needed")
+    if not rows:
+        return {"error": "The shopping list is empty."}
+    if db.one("SELECT id FROM grocery_orders WHERE status='placed'"):
+        return {"status": "already_ordered", "note": "A grocery delivery is already on its way."}
+    priced = [(r["item"], _price(r["item"])) for r in rows]
+    items_total = sum(p or 0 for _, p in priced)
+    fee = 0 if items_total >= 499 else 25
+    # Earliest delivery slot (every 30 min from 45 min out) that avoids the calendar and quiet hours.
+    t = (db.now() + timedelta(minutes=45)).replace(second=0, microsecond=0)
+    t = t.replace(minute=0 if t.minute < 30 else 30) + timedelta(minutes=30)
+    while _clashes(t, 30) or not (8 <= t.hour < 20):
+        t += timedelta(minutes=30)
+        if t.hour >= 20:
+            t = (t + timedelta(days=1)).replace(hour=8, minute=0)
+    store = _household().get("grocery_store", "the store").split(",")[0]
+    names = ", ".join(i for i, _ in priced)
+    summary = (f"Order {names} from {store} for about {items_total + fee} rupees"
+               f"{' including 25 rupees delivery' if fee else ''}, delivered {_spoken_time(t)}.")
+    return _pending("order_groceries", {"ids": [r["id"] for r in rows], "total": items_total + fee,
+                                        "slot_at": db.iso(t)}, summary)
+
+
 def assign_task(title: str, assignee: str, due_at: str = "") -> dict:
     """Give a family member a task and notify them on the family channel."""
     m = _member(assignee)
@@ -428,7 +570,12 @@ def assign_task(title: str, assignee: str, due_at: str = "") -> dict:
     db.run("INSERT INTO tasks (title,assignee,due_at,status,created_at) VALUES (?,?,?,?,?)",
            (title, m["id"], db.iso(due) if due else None, "open", db.iso(db.now())))
     when = f" by {_spoken_time(due)}" if due else ""
-    sent = _send_family(f"@{m['name']}: new task from Anika: {title}{when}.")
+    extra = ""
+    if any(w in title.lower() for w in ("pick up", "grocer", "buy", "shop", "milk")):
+        from urllib.parse import quote
+        base = config.PUBLIC_BASE_URL or "http://localhost:8000"
+        extra = f" Live list (tick items as you shop): {base}/list.html?name={quote(m['name'])}"
+    sent = _send_family(f"@{m['name']}: new task from Anika: {title}{when}.{extra}")
     db.log("task", f"Task for {m['name']}", title + when)
     return {"status": "assigned", "to": m["name"], "notified": sent}
 
@@ -719,6 +866,17 @@ TOOLS = {
     "add_to_shopping_list": (add_to_shopping_list, _s(
         "Add items to the family shopping list.",
         {"items": {"type": "array", "items": STR}, "note": STR}, ["items"])),
+    "shopping_status": (shopping_status, _s(
+        "What's still to buy, what's been bought and by whom, and the estimated total.")),
+    "mark_bought": (mark_bought, _s(
+        "Tick items off the shopping list when someone bought them ('all' for everything).",
+        {"items": {"type": "array", "items": STR}, "by": STR}, ["items"])),
+    "remove_from_shopping_list": (remove_from_shopping_list, _s(
+        "Remove items from the shopping list without buying them.",
+        {"items": {"type": "array", "items": STR}}, ["items"])),
+    "order_groceries": (order_groceries, _s(
+        "Prepare a home delivery for everything on the list (needs the user's yes). Picks a "
+        "delivery slot that avoids the family calendar.")),
     "assign_task": (assign_task, _s(
         "Give a family member a task and notify them.",
         {"title": STR, "assignee": STR, "due_at": WHEN}, ["title", "assignee"])),

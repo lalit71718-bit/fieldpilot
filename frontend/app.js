@@ -8,8 +8,8 @@ let rtc = null, mic = null, live = false, cfg = null, busy = false;
 const textHistory = [];
 
 // Minutes of manual work each automated action replaces (shown as "time saved").
-const MINUTES = { booking: 10, calendar: 3, shopping: 2, task: 2, reminder: 2, notify: 3, knowledge: 5, call: 3, insight: 3 };
-const ACTION_KINDS = ["booking", "calendar", "shopping", "task", "reminder", "notify", "call"];
+const MINUTES = { order: 12, booking: 10, calendar: 3, shopping: 2, task: 2, reminder: 2, notify: 3, knowledge: 5, call: 3, insight: 3 };
+const ACTION_KINDS = ["order", "booking", "calendar", "shopping", "task", "reminder", "notify", "call"];
 const fmtTime = (ts) => {
   const d = new Date(ts.replace(" ", "T")), now = new Date();
   const day = d.toDateString() === now.toDateString() ? "Today" :
@@ -244,7 +244,20 @@ function render(s) {
   $("tasks").innerHTML = s.tasks.map((t) =>
     `<div class="task ${t.status}"><span class="box">${t.status === "done" ? "✓" : ""}</span><span>${esc(t.title)} <span class="muted">· ${esc(nameOf(t.assignee))}${t.due_at && t.status !== "done" ? " · " + esc(fmtTime(t.due_at)) : ""}</span></span></div>`).join("")
     || '<div class="muted">No tasks.</div>';
-  $("shopping").innerHTML = s.shopping.length ? `<ul class="shop">${s.shopping.map((x) => `<li>${esc(x.item)}</li>`).join("")}</ul>` : '<div class="muted">List is empty.</div>';
+  const todo = s.shopping.filter((x) => x.status === "needed"), got = s.shopping.filter((x) => x.status !== "needed");
+  $("shop-total").textContent = todo.length ? `≈ ₹${s.shopping_total}` : got.length ? "all done" : "-";
+  $("shop-total").className = "pill " + (todo.length ? "" : got.length ? "resolved" : "");
+  $("shopping").innerHTML = s.shopping.length ? `<ul class="shop-list shop-dash">${[...todo, ...got].map((x) => {
+    const done = x.status !== "needed";
+    const by = x.status === "ordered" ? "ordered online" : x.bought_by ? "bought by " + esc(x.bought_by) : done ? "bought" : "";
+    return `<li><button class="tick ${done ? "on" : ""}" data-shop="${x.id}" ${x.status === "ordered" ? "disabled" : ""} aria-label="${done ? "Untick" : "Tick"} ${esc(x.item)}">${done ? "✓" : ""}</button><span style="${done ? "text-decoration:line-through;color:var(--muted)" : ""}">${esc(x.item)}</span>${by ? ` <small class="muted">${by}</small>` : ""}</li>`;
+  }).join("")}</ul>` : '<div class="muted">List is empty.</div>';
+  document.querySelectorAll("[data-shop]").forEach((b) => b.onclick = async () => {
+    await api("/api/shopping/toggle", { method: "POST", body: JSON.stringify({ id: b.dataset.shop, by: "Anika" }) }).catch(() => {});
+    refresh();
+  });
+  const go = s.grocery_orders && s.grocery_orders[0];
+  $("shop-order").innerHTML = go ? `🚚 <b>${esc(go.id)}</b> · ₹${go.total} · arrives ${esc(fmtTime(go.slot_at))}` : "";
 
   // Reminders and family channel.
   $("reminders").innerHTML = s.reminders.map((r) =>
@@ -263,7 +276,7 @@ function render(s) {
   $("kpi-events").textContent = s.events.filter((e) => { const d = new Date(e.start_at.replace(" ", "T")); return d >= now && d - now < 864e5; }).length;
   $("kpi-tasks").textContent = s.tasks.filter((t) => t.status === "open").length;
   $("kpi-actions").textContent = s.activity.filter((x) => ACTION_KINDS.includes(x.kind)).length;
-  $("kpi-shop").textContent = s.shopping.length;
+  $("kpi-shop").textContent = s.shopping.filter((x) => x.status === "needed").length;
   $("saved").textContent = s.activity.reduce((m, x) => m + (MINUTES[x.kind] || 0), 0);
 
   // Alarms that fired since the page loaded.
