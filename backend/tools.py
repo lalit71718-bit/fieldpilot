@@ -126,7 +126,8 @@ def _pending(kind: str, payload: dict, summary: str) -> dict:
                            "Then call confirm_action with this action_id."}
 
 
-def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1) -> dict:
+def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1,
+                       additional: bool = False) -> dict:
     """Prepare a spare part order. Needs the technician's confirmation before it is placed."""
     t = _ticket_or_error(ticket_id)
     if not t:
@@ -134,6 +135,14 @@ def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1) -
     p = db.one("SELECT * FROM parts WHERE sku=? COLLATE NOCASE", (sku,))
     if not p:
         return {"error": f"Unknown part {sku}."}
+    existing = db.one("SELECT id, eta FROM orders WHERE ticket_id=? AND sku=? AND status='placed'",
+                      (t["id"], p["sku"]))
+    if existing and not additional:
+        # Guard against double orders (a repeated "yes", or the model re-preparing an order).
+        return {"status": "already_ordered", "order_id": existing["id"], "eta": existing["eta"],
+                "note": "This part is already on order for this ticket. Do not order again "
+                        "unless the technician explicitly asks for an additional unit "
+                        "(then call again with additional=true)."}
     s = db.one("SELECT * FROM stock WHERE sku=? AND warehouse=? COLLATE NOCASE",
                (p["sku"], warehouse))
     if not s or s["qty"] < qty:
@@ -254,21 +263,33 @@ def _send_supervisor(message: str, ticket_id: str, urgent: bool) -> dict:
 
 
 def schedule_followup(ticket_id: str, when: str, purpose: str) -> dict:
-    """Schedule a revisit or follow-up. `when` is an ISO date-time like 2026-11-21T10:30."""
+    """Schedule (or move) the revisit for a ticket. `when` is LOCAL time, e.g. 2026-11-21T10:30."""
     t = _ticket_or_error(ticket_id)
     if not t:
         return {"error": f"Ticket {ticket_id} not found."}
     try:
-        dt = datetime.fromisoformat(when.replace("Z", ""))
+        dt = datetime.fromisoformat(when.strip().replace("Z", "+00:00"))
     except ValueError:
-        return {"error": "Give `when` as an ISO date-time, e.g. 2026-11-21T10:30."}
+        return {"error": "Give `when` as a local ISO date-time, e.g. 2026-11-21T10:30."}
+    if dt.tzinfo is not None:  # model sent UTC or an offset: convert to local wall-clock time
+        dt = dt.astimezone().replace(tzinfo=None)
+    dt = dt.replace(second=0, microsecond=0)
     if dt < db.now() - timedelta(minutes=5):
         return {"error": "That time is in the past."}
-    if db.one("SELECT id FROM followups WHERE ticket_id=? AND when_at=?", (t["id"], db.iso(dt))):
-        return {"status": "already_scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
+    existing = db.one("SELECT id, when_at FROM followups WHERE ticket_id=? AND when_at>=? "
+                      "ORDER BY when_at", (t["id"], db.iso(db.now())))
+    nice = dt.strftime("%a %d %b %I:%M %p")
+    if existing:
+        # One upcoming visit per ticket: a second booking moves it instead of duplicating.
+        if existing["when_at"] == db.iso(dt):
+            return {"status": "already_scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
+        db.run("UPDATE followups SET when_at=?, purpose=? WHERE id=?",
+               (db.iso(dt), purpose, existing["id"]))
+        db.log("schedule", f"Follow-up moved to {nice}", purpose)
+        return {"status": "rescheduled", "ticket_id": t["id"], "when": db.iso(dt)}
     db.run("INSERT INTO followups (ticket_id,when_at,purpose,created_at) VALUES (?,?,?,?)",
            (t["id"], db.iso(dt), purpose, db.iso(db.now())))
-    db.log("schedule", f"Follow-up booked {dt.strftime('%a %d %b %I:%M %p')}", purpose)
+    db.log("schedule", f"Follow-up booked {nice}", purpose)
     return {"status": "scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
 
 
@@ -339,7 +360,8 @@ TOOLS = {
         {"part": STR}, ["part"])),
     "request_part_order": (request_part_order, _s(
         "Prepare a spare part order (needs technician confirmation).",
-        {"ticket_id": STR, "sku": STR, "warehouse": STR, "qty": {"type": "integer"}},
+        {"ticket_id": STR, "sku": STR, "warehouse": STR, "qty": {"type": "integer"},
+         "additional": {"type": "boolean"}},
         ["ticket_id", "sku", "warehouse"])),
     "update_ticket": (update_ticket, _s(
         "Add a work note and/or set status: in_progress, waiting_for_parts, resolved "
@@ -352,7 +374,8 @@ TOOLS = {
         "Message the supervisor on Slack. urgent=true escalates the incident.",
         {"message": STR, "ticket_id": STR, "urgent": {"type": "boolean"}}, ["message"])),
     "schedule_followup": (schedule_followup, _s(
-        "Book a revisit/follow-up for a ticket at an ISO date-time.",
+        "Book or move the revisit for a ticket. `when` is local time (no timezone), "
+        "e.g. 2026-11-21T10:30. Only use a time the technician said.",
         {"ticket_id": STR, "when": STR, "purpose": STR}, ["ticket_id", "when", "purpose"])),
     "generate_service_report": (generate_service_report, _s(
         "Create and share the service report for the visit.",

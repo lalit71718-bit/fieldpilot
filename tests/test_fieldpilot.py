@@ -192,7 +192,7 @@ def test_spoken_time_and_speech_cleanup():
 
 def test_repeated_requests_do_not_duplicate_actions():
     a = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "fit"})
-    b = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "revisit"})
+    b = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30:00", "purpose": "revisit"})
     assert a["status"] == "scheduled" and b["status"] == "already_scheduled"
     r1 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
     r2 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
@@ -233,3 +233,24 @@ def test_gemini_gets_thought_signatures_and_groq_does_not():
 def test_lists_are_flattened_for_speech():
     out = brain.speakable("1. Check coil. 2. Test 1x CAP-45, 4 hrs. Confirm order? (Yes/No)")
     assert out == "Check coil. Test 1 CAP-45, 4 hours. Confirm order?"
+
+
+def test_no_double_orders():
+    a = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
+    db.remember("last_user_text", "yes")
+    tools.call("confirm_action", {"action_id": a["action_id"], "approved": True})
+    again = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
+    assert again["status"] == "already_ordered" and len(db.q("SELECT * FROM orders")) == 1
+    extra = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45",
+                                              "warehouse": "HSR Layout", "additional": True})
+    assert extra["status"] == "awaiting_confirmation"
+
+
+def test_followup_is_moved_not_duplicated_and_utc_converted():
+    from datetime import datetime, timezone
+    tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "a"})
+    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T12:00", "purpose": "b"})
+    assert r["status"] == "rescheduled" and len(db.q("SELECT * FROM followups")) == 1
+    utc = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T05:00Z", "purpose": "c"})
+    expected = datetime(2030, 1, 1, 5, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    assert utc["when"] == expected.isoformat(sep=" ")
