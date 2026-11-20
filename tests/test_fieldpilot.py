@@ -489,3 +489,72 @@ def test_store_order_over_mcp_needs_yes_then_phone_approval(monkeypatch):
     p2 = tools.call("store_checkout", {})
     r2 = tools.call("confirm_action", {"action_id": p2["action_id"], "approved": True})
     assert c.post("/api/store/pay", json={"order": r2["order_id"], "approve": False}).json()["payment"] == "declined"
+
+
+# ---------------------------------------------------------------- calendar sync, missed reminders, spending
+
+def test_calendar_feed_is_valid_ics_with_bookings():
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    r = TestClient(app).get("/calendar.ics")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/calendar")
+    body = r.text
+    assert body.startswith("BEGIN:VCALENDAR") and body.rstrip().endswith("END:VCALENDAR")
+    assert body.count("BEGIN:VEVENT") == body.count("END:VEVENT") >= 2
+    assert "repair" in body.lower() and "TRIGGER:-PT30M" in body
+    ev = TestClient(app).get("/api/state").json()["events"]
+    assert all(e["gcal"].startswith("https://calendar.google.com/") for e in ev)
+
+
+def test_unconfirmed_medicine_reminder_alerts_the_family(monkeypatch):
+    from datetime import timedelta
+    sent = []
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: sent.append(m) or "sent")
+    past = db.iso(db.now() - timedelta(minutes=7))
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("take her BP tablet", "dadi", past, "scheduled", past))
+    tools.due_reminders()
+    out = tools.escalate_missed_reminders()
+    assert len(out) == 1 and "Dadi hasn't confirmed" in out[0]["message"] and "BP tablet" in sent[-1]
+    assert tools.escalate_missed_reminders() == []             # alerts once only
+
+
+def test_got_it_stops_the_escalation():
+    from datetime import timedelta
+    past = db.iso(db.now() - timedelta(minutes=7))
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("take her BP tablet", "dadi", past, "scheduled", past))
+    tools.due_reminders()
+    TestClient(app).post("/api/alarm/ack", json={"title": "Reminder for Dadi",
+                                                 "detail": "take her BP tablet", "how": "done"})
+    assert tools.escalate_missed_reminders() == []
+
+
+def test_voice_confirmation_marks_reminder_done():
+    from datetime import timedelta
+    past = db.iso(db.now() - timedelta(minutes=1))
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("take her BP tablet", "dadi", past, "scheduled", past))
+    tools.due_reminders()
+    assert tools.call("reminder_done", {"member": "Dadi", "what": "BP tablet"})["status"] == "confirmed"
+    assert tools.escalate_missed_reminders() == []
+
+
+def test_spending_summary_adds_repairs_and_orders(monkeypatch):
+    from backend import config as cfg, store_server
+    monkeypatch.setattr(cfg, "STORE_MCP_URL", "internal")
+    store_server.reset_store()
+    assert tools.call("spending_summary", {"period": "week"})["total_inr"] == 0
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    tools.call("store_add_to_cart", {"items": [{"item_id": "F101"}]})
+    r = tools.call("confirm_action", {"action_id": tools.call("store_checkout", {})["action_id"], "approved": True})
+    s = tools.call("spending_summary", {"period": "week"})
+    fee = db.one("SELECT fee FROM bookings")["fee"]
+    assert s["total_inr"] == fee                         # unpaid order not counted yet
+    store_server.respond_to_payment(r["order_id"], True)
+    s = tools.call("spending_summary", {"period": "week"})
+    assert s["total_inr"] == fee + 139 and s["by_category"]["Food & delivery"] == 139
+    assert TestClient(app).get("/api/state").json()["spent_week"] == s["total_inr"]

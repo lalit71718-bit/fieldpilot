@@ -56,6 +56,8 @@ async def _reminder_clock():
         try:
             for r in tools.due_reminders():
                 await agora.speak(r["spoken"])
+            for e in tools.escalate_missed_reminders():  # nobody pressed "Got it"
+                await agora.speak(e["message"])
         except Exception as e:  # never let the clock die
             db.log("error", "Reminder clock", str(e)[:200])
         await asyncio.sleep(10)
@@ -137,13 +139,16 @@ def state():
     return {
         "members": db.q("SELECT * FROM members"),
         "household": db.q("SELECT * FROM household"),
-        "events": db.q("SELECT * FROM events ORDER BY start_at"),
+        "events": [dict(e, gcal=tools.calendar_links(e["title"], e["start_at"], e["minutes"] or 60)["google"])
+                   for e in db.q("SELECT * FROM events ORDER BY start_at")],
         "tasks": db.q("SELECT * FROM tasks ORDER BY status DESC, due_at"),
         "shopping": db.q("SELECT * FROM shopping WHERE status IN ('needed','bought','ordered') "
                          "ORDER BY status DESC, id"),
         "shopping_total": tools.shopping_status()["estimated_total_inr"],
         "grocery_orders": db.q("SELECT * FROM grocery_orders ORDER BY created_at DESC"),
         "store_orders": store_server.all_orders(),
+        "spent_week": tools.spending_summary("week")["total_inr"] if db.q(
+            "SELECT id FROM bookings UNION SELECT id FROM grocery_orders") or db.recall("store_orders") else 0,
         "store_cart": store_server._cart(tools.CART_ID),
         "appliance": db.one("SELECT * FROM appliances WHERE id=?", (active,)) if active else None,
         "history": db.q("SELECT * FROM appliance_history WHERE appliance_id=? ORDER BY date DESC",
@@ -230,8 +235,10 @@ async def alarm_ack(request: Request):
     body = await request.json()
     title, detail, how = (str(body.get(k, "")) for k in ("title", "detail", "how"))
     who = title.removeprefix("Reminder for ").strip() or "Anika"
+    m = db.one("SELECT id FROM members WHERE name=?", (who,))
+    if how in ("done", "snooze"):
+        tools.acknowledge_reminder(m["id"] if m else "anika", detail)
     if how == "snooze":
-        m = db.one("SELECT id FROM members WHERE name=?", (who,))
         db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
                (detail, m["id"] if m else "anika", db.iso(db.now() + timedelta(minutes=5)),
                 "scheduled", db.iso(db.now())))
@@ -295,6 +302,47 @@ async def store_pay(request: Request):
     db.log("order", f"Payment {'approved' if body.get('approve') else 'declined'} on phone",
            r["order_id"])
     return r
+
+
+def _ics_escape(t: str) -> str:
+    return t.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+@app.get("/calendar.ics")
+def calendar_feed():
+    """The family calendar as a live iCalendar feed. Subscribe once from Google Calendar
+    ('From URL') or the phone's calendar (webcal://) and HomePilot's bookings, deliveries and
+    appointments show up there, with alarms."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from fastapi.responses import Response
+    fmt = lambda d: d.astimezone().astimezone(_tz.utc).strftime("%Y%m%dT%H%M%SZ")
+    now = fmt(db.now())
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//HomePilot//Family calendar//EN",
+             "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:HomePilot · Family",
+             "REFRESH-INTERVAL;VALUE=DURATION:PT15M", "X-PUBLISHED-TTL:PT15M"]
+    names = {m["id"]: m["name"] for m in db.q("SELECT id, name FROM members")}
+    for e in db.q("SELECT * FROM events"):
+        st = _dt.fromisoformat(e["start_at"])
+        lines += ["BEGIN:VEVENT", f"UID:homepilot-event-{e['id']}@homepilot", f"DTSTAMP:{now}",
+                  f"DTSTART:{fmt(st)}", f"DTEND:{fmt(st + _td(minutes=e['minutes'] or 60))}",
+                  f"SUMMARY:{_ics_escape(e['title'])}",
+                  f"DESCRIPTION:{_ics_escape('For ' + names.get(e['member'], 'the family') + ' · added by HomePilot')}"]
+        if e["location"]:
+            lines.append(f"LOCATION:{_ics_escape(e['location'])}")
+        if (e["source"] or "").startswith(("booking", "order")):
+            lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ics_escape(e['title'])}",
+                      "TRIGGER:-PT30M", "END:VALARM"]
+        lines.append("END:VEVENT")
+    for r in db.q("SELECT * FROM reminders WHERE status='scheduled'"):
+        st = _dt.fromisoformat(r["remind_at"])
+        lines += ["BEGIN:VEVENT", f"UID:homepilot-reminder-{r['id']}@homepilot", f"DTSTAMP:{now}",
+                  f"DTSTART:{fmt(st)}", f"DTEND:{fmt(st + _td(minutes=10))}",
+                  f"SUMMARY:{_ics_escape('⏰ ' + names.get(r['member'], 'Anika') + ': ' + r['text'])}",
+                  "BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ics_escape(r['text'])}",
+                  "TRIGGER:PT0M", "END:VALARM", "END:VEVENT"]
+    lines.append("END:VCALENDAR")
+    return Response("\r\n".join(lines) + "\r\n", media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": "inline; filename=homepilot-family.ics"})
 
 
 @app.get("/healthz")

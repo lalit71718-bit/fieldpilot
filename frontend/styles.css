@@ -67,7 +67,7 @@ td.zero{color:var(--bad)} td.flash{animation:flash 1.5s}
 .ev > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ev .d{color:var(--muted)}
 
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
 @media (max-width:700px){.kpis{grid-template-columns:1fr 1fr}}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column}
 .kpi-label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
@@ -210,3 +210,9 @@ tr.new-row td{color:var(--accent)}
 .store-title{font:400 24px/1.15 "Instrument Serif",Georgia,serif}
 @media (max-width:700px){.store-card{grid-template-columns:1fr}}
 #store-sub a{color:var(--accent)}
+
+.cal-sync{float:right;display:flex;gap:10px;font-size:11px;font-weight:500;letter-spacing:.02em;text-transform:none}
+.cal-sync a,.cal-sync button{color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;background:none;border:0;padding:0;font:inherit}
+.cal-sync a:hover,.cal-sync button:hover{color:inherit}
+.gcal{font-size:11px;color:var(--muted);text-decoration:none;margin-left:6px;white-space:nowrap}
+.gcal:hover{text-decoration:underline}

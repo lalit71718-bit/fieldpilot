@@ -60,6 +60,9 @@ ACTIONS
   and needs a yes. After the yes the order is placed and the PAYMENT IS APPROVED ON THE
   USER'S PHONE (UPI-style request; QR on the dashboard). Never ask for a PIN, card or bank
   details, and never say it is paid until store_order_status says so.
+- "Dadi took her tablet" / "done": reminder_done. "How much did we spend?": spending_summary
+  (quote its numbers only). Bookings and deliveries are also on the family's real calendar
+  feed (they can subscribe on their phone or Google Calendar from the dashboard).
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
 - Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
   are spoken in this call and posted to the family channel (not phone alarms). If the user
@@ -326,6 +329,8 @@ FILLERS = {
     "assign_task": "Sending that over.",
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",
+    "reminder_done": "Great, noting that.",
+    "spending_summary": "Adding it up.",
     "remember_fact": "I'll remember that.",
     "cancel_reminder": "Cancelling that.",
     "send_family_update": "Messaging the family.",

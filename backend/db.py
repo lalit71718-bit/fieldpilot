@@ -86,6 +86,7 @@ def _seed(c: sqlite3.Connection) -> None:
         ("diet", "vegetarian household"),
         ("grocery_store", "FreshMart, Indiranagar"),
         ("repair_budget", "under 1,500 rupees per visit unless approved"),
+        ("monthly_budget", "8000 rupees a month for food, groceries and repairs"),
         ("quiet_hours", "no service visits after 8 PM"),
         ("family_channel", "#family"),
     ])

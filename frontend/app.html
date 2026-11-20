@@ -49,6 +49,7 @@
         <div class="kpi"><span class="kpi-label">Open family tasks</span><span id="kpi-tasks" class="kpi-val">-</span></div>
         <div class="kpi"><span class="kpi-label">Actions automated</span><span id="kpi-actions" class="kpi-val">0</span></div>
         <div class="kpi"><span class="kpi-label">Shopping list</span><span id="kpi-shop" class="kpi-val">0</span></div>
+        <div class="kpi"><span class="kpi-label">Spent this week</span><span id="kpi-spent" class="kpi-val">&#8377;0</span></div>
       </div>
       <div id="pending" class="pending hidden"></div>
       <div id="insight" class="insight-banner hidden"></div>
@@ -76,7 +77,11 @@
       </div>
 
       <div class="two">
-        <div class="card"><h3>Family calendar</h3><div id="calendar"></div></div>
+        <div class="card"><h3>Family calendar <span class="cal-sync">
+          <a id="cal-google" target="_blank" rel="noopener" title="Subscribe in Google Calendar: bookings and deliveries appear on your phone">+ Google Calendar</a>
+          <a id="cal-phone" title="Subscribe on iPhone / Android / Outlook">Phone calendar</a>
+          <button id="cal-copy" type="button" title="Copy the calendar feed link">Copy link</button></span></h3>
+          <div id="calendar"></div></div>
         <div class="card">
           <div class="card-head"><h3>Home issue</h3><span id="issue-status" class="pill">-</span></div>
           <div id="issue" class="ticket muted">No appliance problem reported.</div>

@@ -224,7 +224,7 @@ function render(s) {
   const since = new Date(new Date(s.now.replace(" ", "T")).getTime() - 36e5);
   const events = s.events.filter((e) => new Date(e.start_at.replace(" ", "T")) >= since);
   $("calendar").innerHTML = events.length ? `<table><tr><th>When</th><th>What</th><th>Who</th></tr>${events.map((e) =>
-    `<tr class="${e.source.startsWith("booking") ? "new-row" : ""}"><td>${esc(fmtTime(e.start_at))}</td><td>${esc(e.title)}</td><td>${esc(nameOf(e.member))}</td></tr>`).join("")}</table>`
+    `<tr class="${e.source.startsWith("booking") ? "new-row" : ""}"><td>${esc(fmtTime(e.start_at))}</td><td>${esc(e.title)} <a class="gcal" href="${esc(e.gcal || "")}" target="_blank" rel="noopener" title="Add to Google Calendar">+ cal</a></td><td>${esc(nameOf(e.member))}</td></tr>`).join("")}</table>`
     : '<div class="muted">Nothing scheduled.</div>';
 
   // Home issue: appliance, history, booking.
@@ -277,6 +277,7 @@ function render(s) {
   $("kpi-tasks").textContent = s.tasks.filter((t) => t.status === "open").length;
   $("kpi-actions").textContent = s.activity.filter((x) => ACTION_KINDS.includes(x.kind)).length;
   $("kpi-shop").textContent = s.shopping.filter((x) => x.status === "needed").length;
+  $("kpi-spent").textContent = "\u20B9" + (s.spent_week || 0).toLocaleString("en-IN");
   $("saved").textContent = s.activity.reduce((m, x) => m + (MINUTES[x.kind] || 0), 0);
 
   // Alarms that fired since the page loaded.
@@ -341,3 +342,16 @@ function render(s) {
 async function refresh() { try { render(await api("/api/state")); } catch (e) { console.warn(e); } }
 setInterval(refresh, 1500);
 refresh();
+
+// Real calendar sync: the family calendar as a live .ics feed (bookings, deliveries, reminders).
+(function calendarSync() {
+  const feed = location.origin + "/calendar.ics";
+  const webcal = feed.replace(/^https?:/, "webcal:");
+  const g = document.getElementById("cal-google"), p = document.getElementById("cal-phone"), c = document.getElementById("cal-copy");
+  if (g) g.href = "https://calendar.google.com/calendar/render?cid=" + encodeURIComponent(webcal);
+  if (p) p.href = webcal;
+  if (c) c.onclick = async () => {
+    try { await navigator.clipboard.writeText(feed); c.textContent = "Copied"; } catch { prompt("Calendar feed link:", feed); }
+    setTimeout(() => (c.textContent = "Copy link"), 1500);
+  };
+})();

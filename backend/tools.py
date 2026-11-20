@@ -16,7 +16,7 @@ pending action and the user must say yes, which the model passes to confirm_acti
 import json
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import config, db, integrations, rag
 
@@ -326,8 +326,12 @@ def confirm_action(action_id: str, approved: bool) -> dict:
                 db.iso(start - timedelta(minutes=30)), "scheduled", db.iso(db.now())))
         db.log("booking", f"Booked {bid}: {s['provider']}", a["summary"])
         db.log("calendar", "Added to family calendar", f"{app['name']} repair {_spoken_time(start)}")
+        link = calendar_links(f"{app['name']} repair: {s['provider']}", s["slot_at"])["google"]
+        _send_family(f":calendar: {app['name']} repair booked ({bid}) {_spoken_time(start)}. "
+                     f"Add it to your Google Calendar: {link}")
         result = {"status": "done", "booking_id": bid, "when": _spoken_time(start),
-                  "also_done": "added to the family calendar with a reminder 30 minutes before"}
+                  "also_done": "added to the family calendar with a reminder 30 minutes before, "
+                               "and synced to the calendar feed (phone / Google Calendar)"}
     elif a["kind"] == "order_groceries":
         rows = [db.one("SELECT * FROM shopping WHERE id=?", (i,)) for i in p["ids"]]
         rows = [r for r in rows if r and r["status"] == "needed"]
@@ -761,6 +765,98 @@ def due_reminders() -> list[dict]:
     return due
 
 
+ESCALATE_AFTER_MIN = 5
+
+
+def acknowledge_reminder(member: str = "", text: str = "") -> int:
+    """Mark fired reminders as done (from 'Got it', snooze, or 'Dadi took her tablet')."""
+    m = _member(member) if member else None
+    rows = db.q("SELECT * FROM reminders WHERE status='fired'" +
+                (" AND member=?" if m else ""), ((m["id"],) if m else ()))
+    if text:
+        rows = [r for r in rows if _similar(text, r["text"], 0.3) or text.lower() in r["text"].lower()] or rows
+    for r in rows:
+        db.run("UPDATE reminders SET status='acknowledged' WHERE id=?", (r["id"],))
+    return len(rows)
+
+
+def reminder_done(member: str = "", what: str = "") -> dict:
+    """Someone confirms a reminder was done ('Dadi took her BP tablet')."""
+    n = acknowledge_reminder(member, what)
+    who = (_member(member) or {}).get("name", member or "Anika")
+    if not n:
+        return {"status": "nothing_pending", "note": "No reminder was waiting for confirmation."}
+    db.log("reminder", f"Confirmed by voice: {who}", what)
+    return {"status": "confirmed", "who": who, "count": n}
+
+
+def escalate_missed_reminders() -> list[dict]:
+    """Reminders nobody confirmed within a few minutes are escalated to the whole family
+    (the senior-care safety net: 'Dadi hasn't confirmed her BP tablet')."""
+    cutoff = db.iso(db.now() - timedelta(minutes=ESCALATE_AFTER_MIN))
+    rows = db.q("SELECT * FROM reminders WHERE status='fired' AND remind_at<=?", (cutoff,))
+    out = []
+    for r in rows:
+        db.run("UPDATE reminders SET status='escalated' WHERE id=?", (r["id"],))
+        m = db.one("SELECT name FROM members WHERE id=?", (r["member"],))
+        name = m["name"] if m else "Anika"
+        at = _dt(r["remind_at"])
+        hour = at.strftime("%I").lstrip("0") or "12"
+        msg = (f"{name} hasn't confirmed the {hour}:{at.strftime('%M %p')} reminder: "
+               f"{r['text']}. Can someone check on {name}?")
+        _send_family(":warning: " + msg)
+        db.log("escalation", f"Missed reminder: {name}", msg)
+        out.append({"id": r["id"], "who": name, "message": msg})
+    return out
+
+
+def calendar_links(title: str, start: str, minutes: int = 60) -> dict:
+    """Links that put one event into a real calendar (Google Calendar, or a .ics file)."""
+    from urllib.parse import quote
+    st = _dt(start)
+    utc = lambda d: d.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    g = ("https://calendar.google.com/calendar/render?action=TEMPLATE"
+         f"&text={quote(title)}&dates={utc(st)}/{utc(st + timedelta(minutes=minutes))}"
+         "&details=" + quote("Added by HomePilot"))
+    return {"google": g}
+
+
+SPEND_CATEGORIES = {"booking": "Home repairs", "grocery": "Groceries", "store": "Food & delivery"}
+
+
+def spending_summary(period: str = "week") -> dict:
+    """What the family spent through HomePilot: repairs, grocery deliveries and store orders."""
+    days = {"today": 1, "week": 7, "month": 30}.get((period or "week").lower(), 7)
+    since = db.now() - timedelta(days=days)
+    items = []
+    for b in db.q("SELECT * FROM bookings WHERE status='booked' AND created_at>=?", (db.iso(since),)):
+        items.append({"category": "booking", "what": f"{b['provider']} visit", "amount": b["fee"],
+                      "at": b["created_at"]})
+    for g in db.q("SELECT * FROM grocery_orders WHERE created_at>=?", (db.iso(since),)):
+        items.append({"category": "grocery", "what": f"Grocery delivery {g['id']}",
+                      "amount": g["total"], "at": g["created_at"]})
+    for o in json.loads(db.recall("store_orders") or "[]"):
+        st = _store("order_status", {"order_id": o["id"]})
+        if st.get("payment") == "approved":
+            items.append({"category": "store", "what": ", ".join(st.get("items", [])) or o["id"],
+                          "amount": st.get("total_inr", 0), "at": st.get("arrives_at") or ""})
+    total = sum(i["amount"] for i in items)
+    by_cat = {}
+    for i in items:
+        by_cat[SPEND_CATEGORIES[i["category"]]] = by_cat.get(SPEND_CATEGORIES[i["category"]], 0) + i["amount"]
+    budget = int(re.sub(r"\D", "", _household().get("monthly_budget", "8000")) or 8000)
+    warn = ""
+    if days >= 7 and total > budget * days / 30:
+        warn = f"Above the pace of the monthly budget of {budget} rupees."
+    over_repair = [i for i in items if i["category"] == "booking" and i["amount"] > 1500]
+    if over_repair:
+        warn += " A repair went over the 1,500 rupee limit."
+    db.log("money", f"Spending summary ({period})", f"{total} rupees")
+    return {"period": period, "total_inr": total, "by_category": by_cat,
+            "items": [f"{i['what']}: {i['amount']} rupees" for i in items],
+            "monthly_budget_inr": budget, "note": warn.strip() or "Within budget."}
+
+
 def _send_family(message: str, urgent: bool = False) -> str:
     prefix = ":rotating_light: URGENT " if urgent else ":house: "
     delivered = integrations.send_slack(prefix + message, _household().get("family_channel",
@@ -991,6 +1087,12 @@ TOOLS = {
     "remember_fact": (remember_fact, _s(
         "Save something the user explicitly asks you to remember (a birthday, a preference, a "
         "phone number). Saved facts appear in LIVE CONTEXT.", {"fact": STR}, ["fact"])),
+    "reminder_done": (reminder_done, _s(
+        "Someone confirms a reminder was done ('Dadi took her BP tablet'); stops the follow-up alert.",
+        {"member": STR, "what": STR})),
+    "spending_summary": (spending_summary, _s(
+        "What the family spent through HomePilot (repairs, groceries, food orders) for "
+        "'today', 'week' or 'month', against the budget.", {"period": STR})),
     "send_family_update": (send_family_update, _s(
         "Post a message to the family channel. urgent=true needs the user's yes.",
         {"message": STR, "urgent": {"type": "boolean"}}, ["message"])),
