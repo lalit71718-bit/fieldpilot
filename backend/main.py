@@ -10,6 +10,7 @@
   GET  /                   web app
 """
 import asyncio
+import json
 import random
 import time
 from contextlib import asynccontextmanager
@@ -122,6 +123,7 @@ def state():
         "insight": tools.fault_insight(active) if active else None,
         "expert_called": bool(db.recall("expert_call")),
         "call_active": bool(agora._state.get("agent_id")),
+        "invites": json.loads(db.recall("invites") or "[]"),
         "now": db.iso(db.now()),
     }
 
@@ -200,6 +202,21 @@ async def alarm_ack(request: Request):
         db.log("reminder", f"Snoozed 5 min: {who}", detail)
     else:
         db.log("reminder", f"{'Acknowledged' if how == 'done' else 'Missed'}: {who}", detail)
+    return {"ok": True}
+
+
+@app.post("/api/joined")
+async def joined(request: Request):
+    """The join page reports who joined or left, so the dashboard can show it."""
+    body = await request.json()
+    name = str(body.get("name") or "A family member")[:40]
+    left = bool(body.get("left"))
+    invites = json.loads(db.recall("invites") or "[]")
+    for inv in invites:
+        if inv["who"].lower() == name.lower():
+            inv["joined"] = not left
+    db.remember("invites", json.dumps(invites))
+    db.log("call", f"{name} {'left' if left else 'joined'} the call")
     return {"ok": True}
 
 

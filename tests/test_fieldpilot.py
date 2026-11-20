@@ -284,7 +284,7 @@ def test_summary_family_call_and_state():
     assert "Done: Take out the recycling" in s1["summary"]
     assert len([n for n in db.q("SELECT message FROM notifications") if "Family update" in n["message"]]) == 1
     c = tools.call("call_family_member", {"member": "Rohan", "reason": "AC repair"})
-    assert c["status"] == "invited" and c["join_link"].endswith("/expert.html")
+    assert c["status"] == "link_sent" and "/expert.html?name=Rohan" in c["join_link"]
     db.remember("last_user_text", "living room AC shows E4")
     tools.call("get_appliance", {"appliance": "AC"})
     st = TestClient(app).get("/api/state").json()
@@ -349,8 +349,8 @@ def test_guards_from_live_test():
     assert tools.call("send_family_update", {"message": "Dinner is at 8."})["status"] == "already_sent"
     # live call invites: family members only, no repeats
     assert "error" in tools.call("call_family_member", {"member": "963299527"})
-    assert "error" in tools.call("call_family_member", {"member": "Matthew"})
-    assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "invited"
+    assert tools.call("call_family_member", {"member": "Matthew"})["status"] == "link_sent"  # guest by name
+    assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "link_sent"
     assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "already_invited"
 
 
@@ -391,3 +391,19 @@ def test_alarm_ack_and_snooze():
     c.post("/api/alarm/ack", json={"title": "Reminder for Dadi", "detail": "Take BP tablet", "how": "done"})
     assert db.one("SELECT * FROM activity WHERE title='Acknowledged: Dadi'")
     assert c.post("/api/speak", json={"text": ""}).json()["ok"] is False
+
+
+def test_invite_guests_by_name_not_numbers_and_join_status():
+    r = tools.call("call_family_member", {"member": "my friend Priya", "reason": "planning dinner"})
+    assert r["status"] == "link_sent" and r["who"] == "Priya" and "name=Priya" in r["join_link"]
+    assert "error" in tools.call("call_family_member", {"member": "9632995271"})
+    assert "error" in tools.call("call_family_member", {"member": "Anika"})
+    assert tools.call("call_family_member", {"member": "Kabir"})["status"] == "link_sent"
+    c = TestClient(app)
+    both = tools.call("call_family_member", {"member": "Rohan and my friend Meera"})
+    assert both["invited"] == ["Rohan", "Meera"]
+    c.post("/api/joined", json={"name": "Kabir"})
+    st = c.get("/api/state").json()
+    who = {i["who"]: i["joined"] for i in st["invites"]}
+    assert who["Kabir"] is True and who["Rohan"] is False and "Priya" in who
+    assert any(a["title"] == "Kabir joined the call" for a in st["activity"])

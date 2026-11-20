@@ -22,6 +22,7 @@
     <div class="card">
       <h3>Live voice call</h3>
       <p class="muted">You'll join the same live Agora call as Anika and the HomePilot assistant. Allow the microphone when asked.</p>
+      <label class="name-row">Your name <input id="guest-name" autocomplete="name" placeholder="e.g. Priya"></label>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button id="join" class="big">Join call</button>
         <button id="mute" class="ghost big hidden">Mute</button>
@@ -38,6 +39,12 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let rtc = null, mic = null, muted = false;
 const others = new Set();
+const guestName = new URLSearchParams(location.search).get("name") || "";
+if (guestName) document.querySelector(".card h3").textContent = `Hi ${guestName}, Anika invited you to a call`;
+$("guest-name").value = guestName;
+const myName = () => $("guest-name").value.trim() || "A family member";
+const report = (left) => fetch("/api/joined", { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: myName(), left }), keepalive: true }).catch(() => {});
 
 async function loadJob() {
   const s = await (await fetch("/api/state")).json();
@@ -90,7 +97,7 @@ $("join").onclick = async () => {
   showErr("");
   if (rtc) { // leave
     if (mic) { mic.close(); mic = null; }
-    await rtc.leave(); rtc = null; others.clear();
+    await rtc.leave(); rtc = null; others.clear(); report(true);
     $("join").textContent = "Join call"; $("mute").classList.add("hidden");
     $("status").textContent = "Not in call"; $("status").classList.remove("on"); updateWho(); return;
   }
@@ -110,6 +117,7 @@ $("join").onclick = async () => {
     rtc.remoteUsers.forEach((u) => others.add(u.uid));
     $("join").textContent = "Leave call";
     $("status").textContent = "In call"; $("status").classList.add("on"); updateWho();
+    report(false);
     try {  // a blocked mic shouldn't stop them from listening
       mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true });
       await rtc.publish([mic]);
@@ -124,7 +132,7 @@ $("join").onclick = async () => {
 };
 
 $("mute").onclick = async () => { if (!mic) return; muted = !muted; await mic.setEnabled(!muted); $("mute").textContent = muted ? "Unmute" : "Mute"; };
-window.addEventListener("pagehide", () => { if (rtc) rtc.leave(); });
+window.addEventListener("pagehide", () => { if (rtc) { report(true); rtc.leave(); } });
 loadJob(); setInterval(loadJob, 3000);
 </script>
 </body>

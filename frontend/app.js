@@ -17,7 +17,8 @@ const fmtTime = (ts) => {
   return `${day} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 };
 let remoteUsers = new Set();
-let lastAlarmId = null;  // newest alarm already shown
+let lastAlarmId = null;
+let lastInviteAt = "";  // newest alarm already shown
 
 // Short chime with Web Audio (no sound file needed).
 function chime() {
@@ -179,6 +180,8 @@ $("text-form").onsubmit = async (ev) => {
 };
 
 $("alarm-ok").onclick = () => stopAlarm("done");
+$("invite-copy").onclick = async () => { try { await navigator.clipboard.writeText($("invite-link").value); $("invite-copy").textContent = "Copied"; setTimeout(() => ($("invite-copy").textContent = "Copy link"), 1500); } catch { $("invite-link").select(); } };
+$("invite-close").onclick = () => { $("invite").dataset.hidden = lastInviteAt; $("invite").classList.add("hidden"); };
 $("alarm-snooze").onclick = () => stopAlarm("snooze");
 
 $("reset").onclick = async () => {
@@ -258,6 +261,23 @@ function render(s) {
     if (lastAlarmId === null) lastAlarmId = newest.id;           // don't replay old ones on load
     else if (newest.id !== lastAlarmId) { lastAlarmId = newest.id; showAlarm(newest); }
   } else if (lastAlarmId === null) lastAlarmId = 0;
+
+  // Invites in the last 15 minutes: one QR (general join link) + status per person.
+  const nowT = new Date(s.now.replace(" ", "T"));
+  const invs = (s.invites || []).filter((i) => nowT - new Date(i.at.replace(" ", "T")) < 15 * 60000);
+  const card = $("invite");
+  lastInviteAt = invs.length ? invs[invs.length - 1].at : "";
+  if (invs.length && card.dataset.hidden !== lastInviteAt) {
+    card.classList.remove("hidden");
+    const general = invs[0].link.split("?")[0];
+    if (card.dataset.link !== general) {
+      card.dataset.link = general;
+      $("invite-link").value = general;
+      if (window.qrcode) { const q = qrcode(0, "M"); q.addData(general); q.make(); $("invite-qr").innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }
+    }
+    $("invite-who").innerHTML = invs.map((i) =>
+      `<li class="${i.joined ? "joined" : ""}">${i.joined ? "✓" : "…"} <b>${esc(i.who)}</b> ${i.joined ? "joined" : "waiting to join"}${i.guest ? ' <span class="muted">(guest)</span>' : ""}</li>`).join("");
+  } else card.classList.add("hidden");
 
   // Family member on the live call.
   const chip = $("chip-expert");

@@ -591,28 +591,59 @@ def daily_summary() -> dict:
     return {"status": "sent", "summary": body}
 
 
-def call_family_member(member: str, reason: str = "") -> dict:
-    """Invite a family member into this live voice call (Agora RTC) with a join link."""
-    m = _member(member)
-    if not m:
-        names = ", ".join(x["name"] for x in db.q("SELECT name FROM members WHERE id!='anika'"))
-        return {"error": f"Only family members can be invited ({names}). Phone numbers and "
-                         "other people aren't supported."}
-    name = m["name"]
-    last = db.recall("invite_" + m["id"])
+def _invite_one(raw: str, reason: str) -> dict:
+    m = _member(raw)
+    if m and m["id"] == "anika":
+        return {"who": "Anika", "error": "Anika is already in the call."}
+    if m:
+        name, key = m["name"], m["id"]
+    else:
+        # Guests by name are fine ("my friend Priya"); phone numbers can't be dialled.
+        cleaned = re.sub(r"^(my|our)\s+(friend|neighbou?r|cousin|uncle|aunt|colleague)\s+", "",
+                         raw.strip(), flags=re.I).strip()
+        if not cleaned or re.search(r"\d", cleaned) or len(cleaned.split()) > 3:
+            return {"who": raw, "error": "I can only invite people by name with a join link. "
+                                         "I can't dial phone numbers."}
+        name, key = cleaned.title(), "guest_" + re.sub(r"\W+", "_", cleaned.lower())
+    last = db.recall("invite_" + key)
     if last and datetime.fromisoformat(last) > db.now() - timedelta(minutes=3):
-        return {"status": "already_invited", "who": name,
-                "say": f"{name} was already invited a moment ago; the link is in the family channel."}
-    db.remember("invite_" + m["id"], db.iso(db.now()))
+        return {"who": name, "status": "already_invited"}
+    db.remember("invite_" + key, db.iso(db.now()))
+    from urllib.parse import quote
     base = config.PUBLIC_BASE_URL or "http://localhost:8000"
-    link = f"{base}/expert.html"
-    text = (f":telephone_receiver: @{name}, Anika wants you on a live call"
-            f"{': ' + reason if reason else ''}. Join now: {link}")
-    sent = _send_family(text)
+    link = f"{base}/expert.html?name={quote(name)}"
+    _send_family(f":telephone_receiver: @{name}, Anika wants you on a live call"
+                 f"{': ' + reason if reason else ''}. Join now: {link}")
+    invites = [i for i in json.loads(db.recall("invites") or "[]") if i["who"] != name]
+    invites.append({"who": name, "link": link, "at": db.iso(db.now()), "joined": False,
+                    "guest": not m})
+    db.remember("invites", json.dumps(invites[-6:]))
     db.remember("expert_call", db.iso(db.now()))
-    db.log("call", f"{name} invited to live call", reason)
-    return {"status": "invited", "who": name, "join_link": link, "delivery": sent,
-            "say": f"Tell the user {name} has been invited and can join this call from their phone."}
+    db.log("call", f"{name} invited to live call" + (" (guest)" if not m else ""), reason)
+    return {"who": name, "status": "link_sent", "join_link": link}
+
+
+def call_family_member(member: str, reason: str = "") -> dict:
+    """Invite one or more people into this live voice call (Agora RTC): 'Rohan',
+    'Priya and Kabir'. Each gets a join link in the family channel; a QR code shows on screen."""
+    names = [n.strip() for n in re.split(r",|&|\band\b|\balso\b", member or "", flags=re.I)
+             if n.strip()]
+    if not names:
+        return {"error": "Who should I invite?"}
+    results = [_invite_one(n, reason) for n in names[:5]]
+    sent = [r["who"] for r in results if r.get("status") == "link_sent"]
+    already = [r["who"] for r in results if r.get("status") == "already_invited"]
+    errors = [f"{r['who']}: {r['error']}" for r in results if r.get("error")]
+    out = {"status": "link_sent" if sent else ("already_invited" if already else "error"),
+           "invited": sent, "already_invited": already, "errors": errors,
+           "say": ("Say you've sent a join link to " + " and ".join(sent) + "; it's in the family "
+                   "channel and as a QR code on the screen. Never say you are phoning anyone.")
+                  if sent else "Explain briefly."}
+    if len(results) == 1 and results[0].get("join_link"):
+        out["who"], out["join_link"] = results[0]["who"], results[0]["join_link"]
+    if not sent and not already:
+        out["error"] = "; ".join(errors)
+    return out
 
 
 def remember_fact(fact: str) -> dict:
@@ -709,8 +740,8 @@ TOOLS = {
     "daily_summary": (daily_summary, _s(
         "Wrap-up: send the family what got done, what's open, bookings and reminders.")),
     "call_family_member": (call_family_member, _s(
-        "Bring a family member (Rohan, Kabir or Dadi) into this live voice call via a join "
-        "link. Not for phone numbers or other people.",
+        "Invite one or more people into this live voice call with join links: pass every name "
+        "in one call, e.g. 'Priya and Kabir'. Family or guests by name; it never phones anyone.",
         {"member": STR, "reason": STR}, ["member"])),
 }
 

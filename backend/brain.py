@@ -50,7 +50,8 @@ ACTIONS
   thanks / okay are not new bookings.
 - Shopping: add_to_shopping_list. Chores: assign_task (it notifies the person). "X did it":
   complete_task. Medicine or other nudges: set_reminder (only a time the user said; ask if
-  not). Calendar: add_event. "Get Rohan on the call": call_family_member.
+  not). Calendar: add_event. "Get Rohan / my friend Priya on the call": call_family_member (it sends a join link; you
+  never phone anyone).
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
 - Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
   are spoken in this call and posted to the family channel (not phone alarms). If the user
@@ -288,7 +289,7 @@ FILLERS = {
     "cancel_reminder": "Cancelling that.",
     "send_family_update": "Messaging the family.",
     "daily_summary": "Sending the family a summary.",
-    "call_family_member": "Calling them into this call.",
+    "call_family_member": "Sending them a link to join.",
 }
 
 

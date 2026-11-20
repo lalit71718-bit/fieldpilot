@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
   <script src="vendor/AgoraRTC_N-4.22.0.js"></script>
+  <script src="vendor/qrcode-1.4.4.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -50,6 +51,19 @@
       </div>
       <div id="pending" class="pending hidden"></div>
       <div id="insight" class="insight-banner hidden"></div>
+      <div id="invite" class="invite card hidden" aria-live="polite">
+        <div id="invite-qr" class="invite-qr" aria-label="QR code to join the call"></div>
+        <div class="invite-body">
+          <h3>Invited to this call</h3>
+          <ul id="invite-who" class="invite-list"></ul>
+          <p class="muted">Scan with a phone, or open the link from the family channel. HomePilot doesn’t phone anyone; the person joins from the link.</p>
+          <div class="invite-actions">
+            <input id="invite-link" readonly aria-label="Join link">
+            <button id="invite-copy" class="ghost">Copy link</button>
+            <button id="invite-close" class="ghost">Hide</button>
+          </div>
+        </div>
+      </div>
 
       <div class="two">
         <div class="card"><h3>Family calendar</h3><div id="calendar"></div></div>
