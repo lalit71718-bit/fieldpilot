@@ -17,6 +17,10 @@ LLM_API_KEY = env("LLM_API_KEY")
 LLM_MODEL = env("LLM_MODEL", "gpt-4o-mini")
 # Comma-separated models tried in order when the main one is rate-limited (same provider).
 LLM_FALLBACK_MODELS = [m.strip() for m in env("LLM_FALLBACK_MODELS").split(",") if m.strip()]
+# Optional second provider used after the first one's models are all rate-limited.
+LLM2_BASE_URL = env("LLM2_BASE_URL")
+LLM2_API_KEY = env("LLM2_API_KEY")
+LLM2_MODELS = [m.strip() for m in env("LLM2_MODELS").split(",") if m.strip()]
 
 AGORA_APP_ID = env("AGORA_APP_ID")
 AGORA_APP_CERTIFICATE = env("AGORA_APP_CERTIFICATE")

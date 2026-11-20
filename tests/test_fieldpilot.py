@@ -86,7 +86,7 @@ class FakeLLM:
 
 def test_chat_completions_streams_sse_with_tools(monkeypatch):
     fake = FakeLLM()
-    monkeypatch.setattr(brain, "_client", lambda: fake)
+    monkeypatch.setattr(brain, "_targets", lambda: [(fake, "m")])
     c = TestClient(app)
     body = {"model": "x", "stream": True, "messages": [
         {"role": "system", "content": "agora default prompt"},
@@ -108,7 +108,7 @@ def test_chat_completions_streams_sse_with_tools(monkeypatch):
 
 
 def test_state_and_text_chat(monkeypatch):
-    monkeypatch.setattr(brain, "_client", lambda: FakeLLM())
+    monkeypatch.setattr(brain, "_targets", lambda: [(FakeLLM(), "m")])
     c = TestClient(app)
     r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
     assert r.json()["reply"].endswith("Shall I order one?")
@@ -125,3 +125,28 @@ def test_agora_extra_fields_are_stripped():
     convo = msgs[2:]
     assert convo == [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello"},
                      {"role": "user", "content": "first job?"}]
+
+
+def test_no_means_no_even_if_model_approves():
+    p = tools.call("notify_supervisor", {"message": "Need help", "urgent": True})
+    assert p["status"] == "awaiting_confirmation"
+    db.remember("last_user_text", "No. No. No.")
+    r = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert r["status"] == "cancelled"
+    assert db.q("SELECT * FROM notifications") == []
+    p = tools.call("notify_supervisor", {"message": "Need help", "urgent": True})
+    db.remember("last_user_text", "Yes please send it")
+    assert tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})["status"] == "done"
+    assert len(db.q("SELECT * FROM notifications")) == 1
+
+
+def test_falls_back_when_model_invents_tool(monkeypatch):
+    class Bad(FakeLLM):
+        async def create(self, **kw):
+            async def gen():
+                yield _chunk(tool=("check inventory", {"part": "x"}))
+            return gen()
+    monkeypatch.setattr(brain, "_targets", lambda: [(Bad(), "weak"), (FakeLLM(), "good")])
+    c = TestClient(app)
+    r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
+    assert r.json()["reply"].endswith("Shall I order one?")

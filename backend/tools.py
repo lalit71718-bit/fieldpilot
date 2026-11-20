@@ -169,6 +169,10 @@ def confirm_action(action_id: str, approved: bool) -> dict:
         return {"error": f"No pending action {action_id}."}
     if a["status"] != "awaiting_confirmation":
         return {"error": f"Action {a['id']} is already {a['status']}."}
+    if approved and _said_no(db.recall("last_user_text")):
+        # Code-level guard: the model may misread a refusal, the system never will.
+        approved = False
+        db.log("confirm", "Blocked: technician said no", db.recall("last_user_text"))
     if not approved:
         db.run("UPDATE pending_actions SET status='cancelled' WHERE id=?", (a["id"],))
         db.log("confirm", "Cancelled by technician", a["summary"])
@@ -190,6 +194,9 @@ def confirm_action(action_id: str, approved: bool) -> dict:
         db.log("order", f"Order {order_id} placed", a["summary"])
         result = {"status": "done", "order_id": order_id, "eta": p["eta"],
                   "ticket_status": "waiting_for_parts"}
+    elif a["kind"] == "escalate":
+        sent = _send_supervisor(p["message"], p.get("ticket_id", ""), urgent=True)
+        result = {"status": "done", "delivery": sent["status"], "to": sent["to"]}
     elif a["kind"] == "resolve_ticket":
         _apply_ticket_update(p["ticket_id"], "resolved", p.get("note", ""))
         result = {"status": "done", "ticket_id": p["ticket_id"], "ticket_status": "resolved"}
@@ -199,8 +206,29 @@ def confirm_action(action_id: str, approved: bool) -> dict:
     return result
 
 
+NO_WORDS = {"no", "nope", "nah", "don't", "dont", "do not", "cancel", "stop", "wait", "not",
+            "never", "hold", "nahi", "mat"}
+YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go", "haan", "ha", "confirm",
+             "please", "proceed", "correct", "right", "do it", "go ahead", "order", "send"}
+
+
+def _said_no(text: str) -> bool:
+    words = set(text.lower().replace(",", " ").replace(".", " ").replace("!", " ").split())
+    phrase = " ".join(text.lower().split())
+    neg = bool(words & NO_WORDS) or "do not" in phrase
+    pos = bool(words & YES_WORDS) or "do it" in phrase or "go ahead" in phrase
+    return neg and not pos
+
+
 def notify_supervisor(message: str, ticket_id: str = "", urgent: bool = False) -> dict:
-    """Send a message (or escalation) to the supervisor's Slack channel."""
+    """Send a message to the supervisor's Slack. Urgent escalations need confirmation."""
+    if urgent:
+        return _pending("escalate", {"message": message, "ticket_id": ticket_id},
+                        f"Send an urgent escalation to your supervisor: {message}")
+    return _send_supervisor(message, ticket_id, urgent=False)
+
+
+def _send_supervisor(message: str, ticket_id: str, urgent: bool) -> dict:
     tech = _tech()
     prefix = ":rotating_light: ESCALATION " if urgent else ":wrench: "
     text = f"{prefix}{('[' + ticket_id + '] ') if ticket_id else ''}{message} - {tech.get('name')}"

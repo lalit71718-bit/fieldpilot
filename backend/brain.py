@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from openai import APIStatusError, AsyncOpenAI, RateLimitError
+from openai import APIError, APIStatusError, AsyncOpenAI, RateLimitError
 
 from . import config, db, tools
 
@@ -57,38 +57,73 @@ HOW YOU WORK
 - When you call tools, do not also write an answer in the same message; answer after the
   results arrive. Use plain words only: write "microfarad", "degrees", "rupees", no symbols.
 - Safety risk, customer escalation or something beyond the technician's skill: offer to escalate
-  with notify_supervisor urgent=true.
+  with notify_supervisor urgent=true (it needs the technician's yes, like orders).
+- You can order parts yourself with request_part_order; don't ask the supervisor to do it.
+- "No", "don't", "cancel", "wait" mean NO: call confirm_action with approved=false.
 - When the work is done, give a one-sentence recap of what was updated."""
 
 
-def _client() -> AsyncOpenAI:
+def _client(base_url: str, api_key: str) -> AsyncOpenAI:
     # No silent SDK retries: on a rate limit we switch model instantly instead of waiting.
-    return AsyncOpenAI(base_url=config.LLM_BASE_URL, api_key=config.LLM_API_KEY or "missing",
-                       max_retries=0, timeout=20)
+    return AsyncOpenAI(base_url=base_url, api_key=api_key or "missing", max_retries=0, timeout=20)
 
 
-def _models() -> list[str]:
-    return [config.LLM_MODEL] + [m for m in config.LLM_FALLBACK_MODELS if m != config.LLM_MODEL]
+def _targets() -> list[tuple[AsyncOpenAI, str]]:
+    """Every (provider, model) we may use, in order. Free tiers have small per-model limits,
+    so we spread load across models and, optionally, a second provider (LLM2_*)."""
+    out = []
+    c1 = _client(config.LLM_BASE_URL, config.LLM_API_KEY)
+    for m in dict.fromkeys([config.LLM_MODEL, *config.LLM_FALLBACK_MODELS]):
+        out.append((c1, m))
+    if config.LLM2_BASE_URL and config.LLM2_API_KEY:
+        c2 = _client(config.LLM2_BASE_URL, config.LLM2_API_KEY)
+        out += [(c2, m) for m in config.LLM2_MODELS]
+    return out
 
 
-async def _create(client, messages):
-    """Call the first model that is not rate-limited (free tiers have small per-model limits)."""
+class _Round:
+    def __init__(self):
+        self.content = ""
+        self.calls: dict[int, dict] = {}
+
+
+async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
+    """One LLM call. Falls through to the next model on rate limits, provider errors and
+    invalid tool calls, as long as nothing has been spoken yet in this round."""
     last: Exception | None = None
+    targets = _targets()
     for attempt in range(2):
-        for model in _models():
+        for client, model in targets:
             try:
-                return await client.chat.completions.create(
+                stream = await client.chat.completions.create(
                     model=model, messages=messages, tools=tools.openai_tools(),
                     tool_choice="auto", temperature=0.3, max_tokens=500, stream=True)
-            except RateLimitError as e:
-                last = e
-                db.log("system", f"{model} rate-limited, trying next model")
-            except APIStatusError as e:
-                if e.status_code not in (404, 503):
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    d = chunk.choices[0].delta
+                    if d.content:
+                        rnd.content += d.content
+                        yield d.content
+                    for tc in d.tool_calls or []:
+                        slot = rnd.calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                        slot["id"] = tc.id or slot["id"]
+                        if tc.function:
+                            slot["name"] += tc.function.name or ""
+                            slot["args"] += tc.function.arguments or ""
+                bad = [c["name"] for c in rnd.calls.values() if c["name"] not in tools.TOOLS]
+                if bad and not rnd.content:
+                    raise ValueError(f"invented tool {bad}")
+                return
+            except (RateLimitError, APIStatusError, APIError, ValueError) as e:
+                if rnd.content:  # already speaking: can't switch model mid-sentence
                     raise
                 last = e
+                rnd.calls.clear()
+                reason = "rate-limited" if isinstance(e, RateLimitError) else "failed"
+                db.log("system", f"{model} {reason}, trying next model", str(e)[:160])
         if attempt == 0:
-            await asyncio.sleep(4)  # every model throttled: wait once for the per-minute window
+            await asyncio.sleep(3)  # everything throttled: wait once for the per-minute window
     raise last or RuntimeError("No LLM model available")
 
 
@@ -170,28 +205,17 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
     if user_text:
         db.log("user", "Technician", user_text)
 
+    db.remember("last_user_text", user_text)
     messages = build_messages(incoming)
-    client = _client()
     said_filler = False
     spoken: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
-        stream = await _create(client, messages)
-        content, calls = "", {}
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            d = chunk.choices[0].delta
-            if d.content:
-                content += d.content
-                piece = speakable(d.content)
-                spoken.append(piece)
-                yield piece
-            for tc in d.tool_calls or []:
-                slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                slot["id"] = tc.id or slot["id"]
-                if tc.function:
-                    slot["name"] += tc.function.name or ""
-                    slot["args"] += tc.function.arguments or ""
+        rnd = _Round()
+        async for piece in _stream_round(messages, rnd):
+            piece = speakable(piece)
+            spoken.append(piece)
+            yield piece
+        content, calls = rnd.content, rnd.calls
         if not calls:
             break
         if not said_filler and not content:

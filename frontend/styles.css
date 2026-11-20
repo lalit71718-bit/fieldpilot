@@ -59,9 +59,10 @@ td.zero{color:var(--bad)} td.flash{animation:flash 1.5s}
 .feed .n .meta{color:var(--muted);font-size:11px}
 .report{white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;max-height:260px;overflow:auto}
 .timeline{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow:auto}
-.ev{display:grid;grid-template-columns:62px 92px 1fr;gap:8px;font-size:13px;align-items:baseline}
+.ev{display:grid;grid-template-columns:62px 92px minmax(0,1fr);gap:8px;font-size:13px;align-items:baseline}
 .ev .t{color:var(--muted);font-size:12px}
 .tag{font-size:11px;border-radius:6px;padding:1px 6px;text-align:center;background:var(--panel2);color:var(--muted)}
 .tag.order,.tag.ticket,.tag.schedule,.tag.report,.tag.notify{color:var(--ok)}
 .tag.confirm{color:var(--accent)} .tag.error{color:var(--bad)} .tag.knowledge,.tag.inventory,.tag.lookup{color:var(--info)}
-.ev .d{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .d{color:var(--muted)}
