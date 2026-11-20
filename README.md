@@ -22,6 +22,9 @@ the ticket, writes the service report, messages the supervisor on Slack and book
 | **Confirm critical actions** | Orders, closing tickets and urgent escalations wait for a spoken **yes**. "No" is enforced in code, even if the model says approve. |
 | **Contextual intelligence** | Live memory each turn: technician, active ticket, pending approvals, placed orders. Points out repeat faults from the machine's history. |
 | **Error handling** | Out-of-stock at the nearest warehouse → best alternative. Invalid or repeated actions are blocked (no double orders). LLM failover across providers. |
+| **Predictive insight** | Spots **repeat faults** from the asset history (E4 for the third time, capacitor flagged but never replaced) and steers to the root cause; the insight also lands in the service report. |
+| **Human escalation over Agora** | "Get me a senior engineer": FieldPilot posts a join link to Slack, and the expert joins the **same live Agora call** as the technician and the AI, from their phone (`/expert.html`). |
+| **Proactive start** | The agent opens with a **shift briefing**: open jobs, top priority, SLA countdown. KPI strip on the dashboard. |
 | **Measurable efficiency** | The dashboard's "Paperwork saved" counter estimates minutes saved per visit from the actions the agent took. |
 
 ## Architecture
@@ -59,6 +62,8 @@ Click **Reset demo** first. Say each line in one go, then wait for the answer.
 | Follow up | "Wrap it up. I'll come back tomorrow at ten thirty. Send the report and tell Priya." | `schedule_followup`, `generate_service_report`, Slack message |
 
 Safety moment for judges: at the yellow banner say **"No"**. The order is cancelled and stock doesn't change.
+
+Wow moment: say **"I'm stuck, get a senior engineer on this call."** A Slack message with a join link arrives; open it on a phone, tap **Join call**, and the expert talks with the technician while FieldPilot listens and keeps working.
 
 ## Run it
 
@@ -98,7 +103,7 @@ mcp dev backend/mcp_server.py      # inspect and call the 10 tools in MCP Inspec
 
 ## Tests
 ```bash
-pytest -q        # 21 tests, no keys needed (the LLM is faked)
+pytest -q        # 23 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout

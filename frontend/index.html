@@ -13,6 +13,7 @@
     <div class="chips">
       <span id="chip-rtc" class="chip">Voice: offline</span>
       <span id="chip-agent" class="chip">Agent: idle</span>
+      <span id="chip-expert" class="chip hidden">Expert: invited</span>
       <span class="chip saved">Paperwork saved: <b id="saved">0</b> min</span>
       <button id="reset" class="ghost" title="Reseed demo data">Reset demo</button>
     </div>
@@ -39,7 +40,14 @@
 
     <!-- RIGHT: live enterprise systems -->
     <section class="board">
+      <div class="kpis">
+        <div class="kpi"><span class="kpi-label">Open jobs</span><span id="kpi-jobs" class="kpi-val">-</span></div>
+        <div class="kpi"><span class="kpi-label">SLA left (active job)</span><span id="kpi-sla" class="kpi-val">-</span></div>
+        <div class="kpi"><span class="kpi-label">Actions automated</span><span id="kpi-actions" class="kpi-val">0</span></div>
+        <div class="kpi"><span class="kpi-label">Parts ordered</span><span id="kpi-parts" class="kpi-val">0</span></div>
+      </div>
       <div id="pending" class="pending hidden"></div>
+      <div id="insight" class="insight-banner hidden"></div>
 
       <div class="card">
         <div class="card-head"><h3>Active ticket</h3><span id="ticket-status" class="pill">-</span></div>

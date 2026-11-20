@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FieldPilot Expert Line</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.22.0/AgoraRTC_N-production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">FP</span> FieldPilot <small>expert line</small></div>
+    <div class="chips"><span id="status" class="chip">Not in call</span></div>
+  </header>
+  <main class="expert-wrap">
+    <div class="card">
+      <h3>A technician needs your help</h3>
+      <div id="ticket" class="ticket muted">Loading the job...</div>
+    </div>
+    <div id="insight" class="insight-banner hidden"></div>
+    <div class="card">
+      <h3>Live voice call</h3>
+      <p class="muted">You'll join the same Agora call as the technician and the FieldPilot AI. Allow the microphone when asked.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button id="join" class="big">Join call</button>
+        <button id="mute" class="ghost big hidden">Mute</button>
+      </div>
+      <p id="who" class="muted"></p>
+    </div>
+  </main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let rtc = null, mic = null, muted = false;
+const others = new Set();
+
+async function loadJob() {
+  const s = await (await fetch("/api/state")).json();
+  const t = s.tickets.find((x) => x.id === s.active_ticket) || s.tickets[0];
+  if (t) {
+    $("ticket").classList.remove("muted");
+    $("ticket").innerHTML = `<div class="title">${esc(t.id)} · ${esc(t.title)}</div>
+      <div class="kv"><span>Asset <b>${esc(t.asset_name)} (${esc(t.model)})</b></span><span>Site <b>${esc(t.site)}</b></span><span>Status <b>${esc(t.status)}</b></span></div>
+      ${t.notes ? `<div class="notes">${esc(t.notes.trim())}</div>` : ""}`;
+  }
+  $("insight").classList.toggle("hidden", !s.insight);
+  if (s.insight) $("insight").innerHTML = `<b>Repeat fault: ${esc(s.insight.code)} &times;${s.insight.previous + 1}</b> · ${esc(s.insight.likely_root_cause)}`;
+}
+
+function updateWho() {
+  $("who").textContent = rtc ? `In the call with ${others.size} other participant(s): technician and FieldPilot AI.` : "";
+}
+
+$("join").onclick = async () => {
+  if (rtc) { // leave
+    if (mic) { mic.close(); mic = null; }
+    await rtc.leave(); rtc = null; others.clear();
+    $("join").textContent = "Join call"; $("mute").classList.add("hidden");
+    $("status").textContent = "Not in call"; $("status").classList.remove("on"); updateWho(); return;
+  }
+  try {
+    $("join").disabled = true; $("status").textContent = "Joining...";
+    const cfg = await (await fetch("/api/config")).json();
+    rtc = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    rtc.on("user-joined", (u) => { others.add(u.uid); updateWho(); });
+    rtc.on("user-left", (u) => { others.delete(u.uid); updateWho(); });
+    rtc.on("user-published", async (u, type) => { await rtc.subscribe(u, type); if (type === "audio") u.audioTrack.play(); });
+    await rtc.join(cfg.app_id, cfg.channel, cfg.token, cfg.uid);
+    mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true });
+    await rtc.publish([mic]);
+    rtc.remoteUsers.forEach((u) => others.add(u.uid));
+    $("join").textContent = "Leave call"; $("mute").classList.remove("hidden");
+    $("status").textContent = "In call"; $("status").classList.add("on"); updateWho();
+  } catch (e) {
+    $("status").textContent = "Could not join"; $("who").textContent = e.message; rtc = null;
+  } finally { $("join").disabled = false; }
+};
+
+$("mute").onclick = async () => { if (!mic) return; muted = !muted; await mic.setEnabled(!muted); $("mute").textContent = muted ? "Unmute" : "Mute"; };
+window.addEventListener("pagehide", () => { if (rtc) rtc.leave(); });
+loadJob(); setInterval(loadJob, 3000);
+</script>
+</body>
+</html>

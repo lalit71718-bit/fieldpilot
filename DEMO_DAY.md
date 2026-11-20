@@ -31,7 +31,9 @@ It prints the tunnel address, checks it, and opens http://localhost:8000.
 6. "Yes, order it." → point at the **yellow banner** → "Yes." → point at stock 2 → 1 and PO-5001.
 7. "Wrap it up. I'll come back tomorrow at ten thirty. Send the report and tell Priya." → show the Slack message on your phone.
 
-Say each sentence in one go, then wait for the answer.
+8. (Wow moment, optional) "I'm stuck, get a senior engineer on this call." → open the Slack link on your phone → **Join call** → talk from the phone; the laptop hears you.
+
+Say each sentence in one go, then wait for the answer. The greeting is now a shift briefing (open jobs, SLA), and a blue "Repeat fault" banner appears once the ticket is opened: point at both.
 
 ## If something fails
 | Problem | Do this |

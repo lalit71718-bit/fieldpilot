@@ -17,7 +17,7 @@ import uuid
 import httpx
 from agora_token_builder import RtcTokenBuilder
 
-from . import config, db
+from . import config, db, tools
 
 API = "https://api.agora.io/api/conversational-ai-agent/v2/projects"
 USER_UID = 1001
@@ -81,7 +81,7 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
                 "style": "openai",
                 "system_messages": [{"role": "system", "content": "FieldPilot"}],
                 "max_history": 24,
-                "greeting_message": "Hi Ravi, FieldPilot here. Which job are we on?",
+                "greeting_message": tools.shift_briefing(),
                 "failure_message": "Sorry, I lost connection to our systems for a moment.",
                 "params": {"model": config.LLM_MODEL},
             },

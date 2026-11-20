@@ -16,7 +16,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agora, brain, config, db
+from . import agora, brain, config, db, tools
 
 app = FastAPI(title="FieldPilot")
 
@@ -94,6 +94,10 @@ def state():
         "followups": db.q("SELECT * FROM followups ORDER BY when_at"),
         "reports": db.q("SELECT * FROM reports ORDER BY created_at DESC"),
         "activity": db.q("SELECT * FROM activity ORDER BY id DESC LIMIT 60"),
+        "insight": tools.fault_insight(db.recall("active_ticket"))
+                   if db.recall("active_ticket") else None,
+        "expert_called": bool(db.recall("expert_call")),
+        "now": db.iso(db.now()),
     }
 
 

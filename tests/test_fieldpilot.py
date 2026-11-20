@@ -283,3 +283,25 @@ def test_run_demo_finds_tunnel_url():
              "2026 INF |  https://happy-tiger-walks-moon.trycloudflare.com  |"]
     assert run_demo.find_tunnel_url(iter(lines)) == "https://happy-tiger-walks-moon.trycloudflare.com"
     assert run_demo.find_tunnel_url(iter(["no url here"])) is None
+
+
+def test_shift_briefing_and_repeat_fault_insight():
+    b = tools.shift_briefing()
+    assert "2 open jobs" in b and "Chiller 3" in b and "E4" in b
+    r = tools.call("get_ticket", {"ticket_id": "TK-1042"})
+    assert r["insight"]["code"] == "E4" and r["insight"]["previous"] == 2
+    assert "capacitor" in r["insight"]["likely_root_cause"]
+    assert "insight" not in tools.call("get_ticket", {"ticket_id": "TK-1043"})
+    rep = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
+    assert "Repeat fault" in db.one("SELECT body FROM reports WHERE id=?", (rep["report_id"],))["body"]
+
+
+def test_call_expert_and_state():
+    r = tools.call("call_expert", {"reason": "need a second opinion"})
+    assert r["status"] == "invited" and r["join_link"].endswith("/expert.html")
+    tools.call("get_ticket", {"ticket_id": "TK-1042"})
+    c = TestClient(app)
+    s = c.get("/api/state").json()
+    assert s["expert_called"] is True and s["insight"]["code"] == "E4" and s["now"]
+    assert c.get("/expert.html").status_code == 200
+    assert "Murf" not in tools.shift_briefing()  # plain spoken text

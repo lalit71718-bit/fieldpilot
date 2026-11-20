@@ -45,6 +45,8 @@ ACTIONS
   updates the ticket, so don't add a note for the same order.
 - Wrap-up: schedule_followup (ask the time if not given), generate_service_report,
   notify_supervisor. Then a one-sentence recap.
+- get_ticket may return an "insight" (repeat fault): say it first, in one sentence ("This is the
+  third E4 on this unit..."), then still guide the first safe check before suggesting an order. Technician stuck or asks for an expert: call_expert.
 - Tool error: say it briefly and offer the next best option. Safety risk or beyond skill:
   offer notify_supervisor with urgent=true."""
 
@@ -242,6 +244,7 @@ def build_messages(incoming: list[dict]) -> list[dict]:
 
 FILLERS = {
     "check_inventory": "One sec, checking stock.",
+    "call_expert": "Calling a senior engineer into this call.",
     "search_manual": "Let me check the manual.",
     "get_ticket": "Pulling up the ticket.",
     "get_my_tickets": "Checking your tickets.",

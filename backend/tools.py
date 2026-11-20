@@ -8,6 +8,7 @@ The same functions are used by:
 Critical actions (ordering parts, closing tickets) never execute directly: they create a
 pending action and the technician must say yes, which the model passes to confirm_action."""
 import json
+import re
 import uuid
 from datetime import datetime, timedelta
 
@@ -53,7 +54,74 @@ def get_ticket(ticket_id: str) -> dict:
                   (t["id"],))
     db.remember("active_ticket", t["id"])
     db.log("lookup", f"Opened {t['id']}", t["title"])
-    return {"ticket": t, "asset": asset, "maintenance_history": history, "orders": orders}
+    out = {"ticket": t, "asset": asset, "maintenance_history": history, "orders": orders}
+    insight = fault_insight(t["id"])
+    if insight:
+        out["insight"] = insight
+        db.log("insight", f"Repeat fault: {insight['code']} x{insight['previous'] + 1}",
+               insight["summary"])
+    return out
+
+
+def fault_insight(ticket_id: str) -> dict | None:
+    """Spot a repeat fault: the ticket's error code already appears in the asset's history."""
+    t = _ticket_or_error(ticket_id)
+    if not t:
+        return None
+    m = re.search(r"\b([EWF]\d{1,3})\b", f"{t['title']} {t['description']}")
+    if not m:
+        return None
+    code = m.group(1)
+    past = [h for h in db.q("SELECT date, summary FROM asset_history WHERE asset_id=? "
+                            "ORDER BY date", (t["asset_id"],))
+            if re.search(rf"\b{code}\b", h["summary"])]
+    if not past:
+        return None
+    parts = sorted({p["sku"] for p in db.q("SELECT sku, name FROM parts")
+                    for h in past if p["name"].split()[-3].lower() in h["summary"].lower()})
+    cause = ("the condenser fan capacitor, flagged before but never replaced"
+             if any("capacitor" in h["summary"].lower() for h in past) else "unclear from history")
+    days = (db.now().date() - datetime.fromisoformat(past[0]["date"]).date()).days
+    return {"code": code, "previous": len(past), "first_seen_days_ago": days,
+            "likely_root_cause": cause, "related_parts": parts,
+            "summary": (f"{code} has occurred {len(past)} times before on this asset in the last "
+                        f"{days} days. Likely root cause: {cause}. Fix the cause, not just reset."),
+            "recommendation": "Replace the part rather than resetting, and add a preventive "
+                              "check at the next quarterly service."}
+
+
+def shift_briefing() -> str:
+    """Spoken greeting when the agent joins: open jobs, top priority, SLA."""
+    tech = _tech()
+    jobs = get_my_tickets()["open_tickets"]
+    name = tech.get("name", "there")
+    if not jobs:
+        return f"Hi {name}, FieldPilot here. You have no open jobs right now."
+    top = jobs[0]
+    hours = (datetime.fromisoformat(top["sla_due"]) - db.now()).total_seconds() / 3600
+    sla = (f"SLA in about {round(hours)} hours" if hours >= 1.5 else
+           "SLA due within the hour" if hours > 0 else "SLA already breached")
+    count = "one open job" if len(jobs) == 1 else f"{len(jobs)} open jobs"
+    return (f"Hi {name}, FieldPilot here. You have {count}. First is {top['asset']} at "
+            f"{top['site'].split(',')[0]}, {top['title'].split(' with ')[-1]}, "
+            f"{top['priority']} priority, {sla}. Tell me when you're on site.")
+
+
+def call_expert(reason: str, ticket_id: str = "") -> dict:
+    """Invite a senior engineer into this live voice call (Agora RTC) via a Slack link."""
+    tech = _tech()
+    base = config.PUBLIC_BASE_URL or "http://localhost:8000"
+    link = f"{base}/expert.html"
+    ticket = ticket_id or db.recall("active_ticket")
+    text = (f":telephone_receiver: LIVE CALL REQUEST{(' [' + ticket + ']') if ticket else ''}: "
+            f"{tech.get('name')} needs a senior engineer: {reason}\nJoin the call now: {link}")
+    delivered = integrations.send_slack(text, tech.get("supervisor_channel", "#field-ops"))
+    db.run("INSERT INTO memory VALUES ('expert_call', ?) ON CONFLICT(key) DO UPDATE SET "
+           "value=excluded.value", (db.iso(db.now()),))
+    db.log("expert", "Expert invited to live call", reason)
+    return {"status": "invited", "join_link": link,
+            "delivery": "Slack" if delivered else "dashboard only (Slack not configured)",
+            "say": "Tell the technician an expert has been invited and will join this call."}
 
 
 def search_manual(query: str) -> dict:
@@ -329,6 +397,9 @@ def generate_service_report(ticket_id: str, findings: str, actions_taken: str,
             f"{o['qty']} x {o['sku']} ({o['id']}, {o['warehouse']}, ETA {o['eta']})" for o in orders))
     if fups:
         lines.append("Follow-up: " + "; ".join(f"{f['when_at']} - {f['purpose']}" for f in fups))
+    ins = fault_insight(t["id"])
+    if ins:
+        lines.append(f"Repeat fault: {ins['summary']}")
     if next_steps:
         lines.append(f"Next steps: {next_steps}")
     lines.append(f"Status: {_ticket_or_error(t['id'])['status']}")
@@ -357,6 +428,10 @@ def _s(desc: str, props: dict | None = None, required: list[str] | None = None) 
 STR = {"type": "string"}
 TOOLS = {
     "get_my_tickets": (get_my_tickets, _s("List the technician's open tickets.")),
+    "call_expert": (call_expert, _s(
+        "Bring a senior engineer into this live voice call (sends them a join link). Use when "
+        "the technician is stuck, asks for an expert, or it is beyond their skill.",
+        {"reason": STR, "ticket_id": STR}, ["reason"])),
     "get_ticket": (get_ticket, _s(
         "Get a ticket with asset details and maintenance history.",
         {"ticket_id": STR}, ["ticket_id"])),

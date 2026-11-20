@@ -8,7 +8,9 @@ let rtc = null, mic = null, live = false, cfg = null, busy = false;
 const textHistory = [];
 
 // Minutes of manual work each automated action replaces (shown as "paperwork saved").
-const MINUTES = { order: 8, ticket: 3, report: 12, notify: 3, schedule: 4, knowledge: 5, inventory: 4 };
+const MINUTES = { order: 8, ticket: 3, report: 12, notify: 3, schedule: 4, knowledge: 5, inventory: 4, expert: 5 };
+const ACTION_KINDS = ["order", "ticket", "report", "notify", "schedule", "expert"];
+let remoteUsers = new Set();
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -34,7 +36,8 @@ async function startVoice() {
     await rtc.subscribe(user, type);
     if (type === "audio") { user.audioTrack.play(); watchAgentVoice(user.audioTrack); setChip("chip-agent", "Agent: in call", true); }
   });
-  rtc.on("user-left", () => setChip("chip-agent", "Agent: left", false));
+  rtc.on("user-joined", (u) => { remoteUsers.add(u.uid); });
+  rtc.on("user-left", (u) => { remoteUsers.delete(u.uid); if (!remoteUsers.size) setChip("chip-agent", "Agent: left", false); });
   await rtc.join(cfg.app_id, cfg.channel, cfg.token, cfg.uid);
   mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true });
   await rtc.publish([mic]);
@@ -160,6 +163,28 @@ function render(s) {
 
   const saved = s.activity.reduce((m, a) => m + (MINUTES[a.kind] || 0), 0);
   $("saved").textContent = saved;
+
+  // KPI strip
+  const open = s.tickets.filter((x) => !["resolved", "closed"].includes(x.status));
+  $("kpi-jobs").textContent = open.length;
+  const slaT = t || open.find((x) => x.priority === "high") || open[0];
+  if (slaT) {
+    const mins = Math.round((new Date(slaT.sla_due.replace(" ", "T")) - new Date(s.now.replace(" ", "T"))) / 60000);
+    const el = $("kpi-sla");
+    el.textContent = slaT.status === "resolved" ? "met" : mins < 0 ? `breached ${-mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+    el.className = "kpi-val " + (slaT.status === "resolved" ? "ok" : mins < 60 ? "bad" : mins < 180 ? "warn" : "");
+  }
+  $("kpi-actions").textContent = s.activity.filter((a) => ACTION_KINDS.includes(a.kind)).length;
+  $("kpi-parts").textContent = s.orders.length;
+
+  // Repeat-fault insight
+  $("insight").classList.toggle("hidden", !s.insight);
+  if (s.insight) $("insight").innerHTML = `<b>Repeat fault detected: ${esc(s.insight.code)} &times;${s.insight.previous + 1}</b> in ${s.insight.first_seen_days_ago} days. Likely root cause: ${esc(s.insight.likely_root_cause)}. <span class="muted">${esc(s.insight.recommendation)}</span>`;
+
+  // Expert call
+  const chip = $("chip-expert");
+  chip.classList.toggle("hidden", !s.expert_called);
+  if (s.expert_called) { const inCall = remoteUsers.size >= 2; chip.textContent = inCall ? "Expert: in call" : "Expert: invited"; chip.className = "chip expert" + (inCall ? " on" : ""); }
 }
 
 async function refresh() { try { render(await api("/api/state")); } catch (e) { console.warn(e); } }
