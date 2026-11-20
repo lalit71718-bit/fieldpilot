@@ -88,6 +88,13 @@ Without voice keys, the **text box** still runs the full agent.
 | `SLACK_WEBHOOK_URL` (optional) | api.slack.com/apps → app → Incoming Webhooks |
 | `BRAIN_API_KEY` | Any password you choose; Agora uses it to call the brain |
 
+### Deploy online (Render, free)
+1. render.com → sign in with GitHub → **New + → Blueprint** → pick this repo (it reads `render.yaml`).
+2. Paste the secret values it asks for (LLM, Agora, Murf, Slack keys) → **Apply**.
+3. Open `https://<your-service>.onrender.com`. The public address is detected automatically, so no tunnel is needed.
+
+Free instances sleep after ~15 minutes idle: open the link a minute before presenting.
+
 Health check: **http://localhost:8000/api/diag** shows each model, the tunnel and missing settings.
 See [DEMO_DAY.md](DEMO_DAY.md) for the checklist before presenting.
 

@@ -38,7 +38,8 @@ def _public_url(raw: str) -> str:
     return url
 
 
-PUBLIC_BASE_URL = _public_url(env("PUBLIC_BASE_URL"))
+# On Render the public address is provided automatically (RENDER_EXTERNAL_URL).
+PUBLIC_BASE_URL = _public_url(env("PUBLIC_BASE_URL") or env("RENDER_EXTERNAL_URL"))
 BRAIN_API_KEY = env("BRAIN_API_KEY", "change-me")
 
 MURF_API_KEY = env("MURF_API_KEY")

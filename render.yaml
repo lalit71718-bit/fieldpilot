@@ -1,0 +1,53 @@
+# One-click deploy on Render (render.com): New + > Blueprint > pick this repo.
+# Secrets are marked sync:false, so Render asks you for them during setup.
+services:
+  - type: web
+    name: fieldpilot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_FALLBACK_MODELS
+        value: openai/gpt-oss-20b
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM2_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai/
+      - key: LLM2_MODELS
+        value: gemini-3.5-flash-lite
+      - key: LLM2_API_KEY
+        sync: false
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false
+      - key: AGORA_CHANNEL
+        value: fieldpilot-demo
+      - key: AGORA_ASR_LANGUAGE
+        value: en-US
+      - key: MURF_API_KEY
+        sync: false
+      - key: MURF_VOICE_ID
+        value: Matthew
+      - key: MURF_LOCALE
+        value: en-US
+      - key: MURF_MODEL
+        value: FALCON
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: BRAIN_API_KEY
+        generateValue: true
+      - key: TZ
+        value: Asia/Kolkata
