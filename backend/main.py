@@ -102,6 +102,46 @@ def reset():
     return {"ok": True}
 
 
+@app.get("/api/diag")
+async def diag():
+    """One-page health check. Shows no secrets, only whether each one is set."""
+    import httpx
+
+    out: dict = {"settings": {
+        "LLM_BASE_URL": config.LLM_BASE_URL, "LLM_MODEL": config.LLM_MODEL,
+        "LLM_FALLBACK_MODELS": config.LLM_FALLBACK_MODELS,
+        "LLM_API_KEY_set": bool(config.LLM_API_KEY),
+        "LLM_API_KEY_starts": config.LLM_API_KEY[:4],
+        "LLM2_set": bool(config.LLM2_BASE_URL and config.LLM2_API_KEY),
+        "PUBLIC_BASE_URL": config.PUBLIC_BASE_URL,
+        "BRAIN_API_KEY_set": bool(config.BRAIN_API_KEY),
+        "missing_for_voice": agora.missing_settings()}}
+    # 1. Can we reach the LLM with our real tools?
+    results = []
+    for client, model in brain._targets():
+        t = time.time()
+        try:
+            r = await client.chat.completions.create(
+                model=model, max_tokens=60, tools=brain.tools.openai_tools(),
+                messages=[{"role": "user", "content": "Say OK."}])
+            results.append({"model": model, "ok": True, "secs": round(time.time() - t, 2),
+                            "reply": (r.choices[0].message.content or "")[:60]})
+        except Exception as e:
+            results.append({"model": model, "ok": False, "error": str(e)[:400]})
+    out["llm"] = results
+    # 2. Can the public tunnel reach this server?
+    if config.PUBLIC_BASE_URL:
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"{config.PUBLIC_BASE_URL}/healthz")
+            out["tunnel"] = {"ok": r.status_code == 200, "status": r.status_code}
+        except Exception as e:
+            out["tunnel"] = {"ok": False, "error": str(e)[:200]}
+    out["recent_errors"] = db.q("SELECT ts, title, detail FROM activity WHERE kind='error' "
+                                "ORDER BY id DESC LIMIT 5")
+    return out
+
+
 @app.get("/healthz")
 def health():
     return {"ok": True}
