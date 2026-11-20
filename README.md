@@ -1,123 +1,125 @@
 # FieldPilot: hands-free voice copilot for field technicians
 
-> Build with Agora, Bengaluru 2026: **PS-2 "From Workplace Assistance to Intelligent Action"** (Field Technician Copilot)
+> **Build with Agora, Bengaluru 2026** · Track **PS-2: From Workplace Assistance to Intelligent Action** (Field Technician Copilot)
+>
+> 🎥 **Demo video:** [add link] · 📊 **Pitch deck:** [add link] · 👥 **Team:** [team name: names]
 
-A technician at a broken machine has both hands busy. They just talk. FieldPilot pulls up their
-ticket and the machine's history, walks them through the repair using the service manual,
-finds the spare part across warehouses, orders it **after the technician says yes**, updates the
-ticket, writes the service report, notifies the supervisor on Slack and books the revisit.
+A technician fixing a broken machine has both hands busy. They just **talk**. FieldPilot pulls up
+their ticket and the machine's history, walks them through the repair using the service manual,
+finds the spare part across warehouses, orders it **only after the technician says yes**, updates
+the ticket, writes the service report, messages the supervisor on Slack and books the revisit.
+
+![FieldPilot dashboard after a full voice run](docs/dashboard.png)
+
+## How it meets the hackathon requirements
+
+| Requirement | How FieldPilot does it |
+|---|---|
+| **Real-time conversational AI** | Agora **Conversational AI** agent in an Agora **RTC** channel: speech-to-text, turn-taking, barge-in. It calls our backend as a custom LLM. |
+| **Natural voice** | **Murf Falcon TTS** speaks every reply. A short filler ("One sec, checking stock") covers tool calls, so there's no dead air. |
+| **Agentic workflow** | 10 tools: tickets, asset history, manual search (RAG), inventory, part orders, ticket updates, Slack, follow-ups, service reports. Also exposed as an **MCP server**. |
+| **End-to-end journey** | *Before:* assigned tickets and history. *During:* voice troubleshooting from the manual. *Action:* stock check, order, ticket update. *After:* report, supervisor update, revisit booked. |
+| **Confirm critical actions** | Orders, closing tickets and urgent escalations wait for a spoken **yes**. "No" is enforced in code, even if the model says approve. |
+| **Contextual intelligence** | Live memory each turn: technician, active ticket, pending approvals, placed orders. Points out repeat faults from the machine's history. |
+| **Error handling** | Out-of-stock at the nearest warehouse → best alternative. Invalid or repeated actions are blocked (no double orders). LLM failover across providers. |
+| **Measurable efficiency** | The dashboard's "Paperwork saved" counter estimates minutes saved per visit from the actions the agent took. |
 
 ## Architecture
 
 ```
- Technician (browser mic)
+ Technician (browser mic, live dashboard)
         │  Agora RTC audio
         ▼
- Agora Conversational AI agent  ── speech-to-text, turn-taking, barge-in
-        │  OpenAI-format POST  /chat/completions   (public URL via tunnel)
+ Agora Conversational AI agent ── speech-to-text, turn-taking, interruptions
+        │  OpenAI-format POST /chat/completions (public URL via Cloudflare tunnel)
         ▼
- FieldPilot backend (FastAPI)  = the brain
-   ├─ brain.py   LLM tool-calling loop, streams reply as SSE (+ instant filler while tools run)
-   ├─ memory     live context injected every turn: technician, active ticket, pending approvals
-   ├─ rag.py     BM25 search over equipment service manuals
-   ├─ tools.py   10 enterprise tools (tickets, history, inventory, orders, Slack, follow-ups, report)
-   │             critical actions -> pending action -> technician says yes -> confirm_action
-   └─ mcp_server.py  same tools exposed over MCP
+ FieldPilot brain (FastAPI)
+   ├─ brain.py       tool-calling loop, streams the reply (SSE), LLM failover, speech cleanup
+   ├─ memory         live context every turn: technician, active ticket, pending approvals
+   ├─ rag.py         BM25 search over equipment service manuals
+   ├─ tools.py       10 enterprise tools + confirmation gate + "no means no" guard
+   └─ mcp_server.py  the same tools over MCP
         │
         ▼ reply text
- Murf Falcon TTS (via Agora)  ──►  technician hears the answer
- Dashboard (same web app) polls /api/state and shows every system change live
+ Murf Falcon TTS (via Agora) ──► technician hears the answer
+ Slack incoming webhook ──► supervisor's channel
 ```
 
-## Demo script (matches the required flow)
+## Demo script
 
-| Phase | Technician says | What happens |
+Click **Reset demo** first. Say each line in one go, then wait for the answer.
+
+| Step | Technician says | What happens on screen |
 |---|---|---|
-| Initiate | "What's my first job?" | `get_my_tickets`: TK-1042 Chiller 3 E4, high priority |
-| Understand | "I'm at the chiller, it's showing E4 again." | `get_ticket` (history: same E4 two months ago, weak capacitor) + `search_manual` E4 |
-| Diagnose | "Capacitor reads thirty-seven." | Manual says replace below 40.5 uF. Gives temporary fix (limit capacity to 60%) |
-| Execute | "Do we have one?" | `check_inventory`: Whitefield **out of stock**, HSR Layout has 2 (error handling) |
-| Confirm | "Order it." → **"Yes."** | `request_part_order` → yellow approval banner → `confirm_action` → stock decreases, PO created, ticket set to waiting for parts |
-| Follow up | "Wrap it up, I'll come back tomorrow at 10:30." | `schedule_followup`, `generate_service_report`, `notify_supervisor` (Slack). Dashboard: "Paperwork saved: N min" |
+| Initiate | "What's my first job?" | `get_my_tickets` → TK-1042, Chiller 3, error E4, high priority |
+| Understand | "I'm at the chiller, it shows E4 again. What should I check?" | `get_ticket` (same E4 two months ago, weak capacitor) + `search_manual` → one safe step at a time |
+| Diagnose | "I measured the capacitor, it reads thirty seven." | Manual: replace below 40.5 microfarad |
+| Execute | "Do we have a replacement?" | `check_inventory`: nearest warehouse **out of stock**, HSR Layout has 2 |
+| Confirm | "Yes, order it." → **"Yes."** | Yellow approval banner → `confirm_action` → PO-5001, stock 2 → 1, ticket "waiting for parts" |
+| Follow up | "Wrap it up. I'll come back tomorrow at ten thirty. Send the report and tell Priya." | `schedule_followup`, `generate_service_report`, Slack message |
 
-Click **Reset demo** before each run.
+Safety moment for judges: at the yellow banner say **"No"**. The order is cancelled and stock doesn't change.
 
-## Quick start
+## Run it
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+.venv\Scripts\activate            # Windows   (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
-cp .env.example .env        # fill in keys
-uvicorn backend.main:app --reload --port 8000
+copy .env.example .env            # then fill in keys (macOS/Linux: cp)
+python run_demo.py
 ```
 
-Open http://localhost:8000. **The text box works with only `LLM_API_KEY` set**, so you can build and
-test the whole agent before voice is wired up.
+`run_demo.py` starts a Cloudflare tunnel, passes its address to the server automatically, checks it
+works and opens the app. You need `cloudflared` (`winget install --id Cloudflare.cloudflared`).
+Without voice keys, the **text box** still runs the full agent.
 
-### Turn on voice
-1. **Agora** ([console.agora.io](https://console.agora.io)): create a project, copy the App ID and App
-   Certificate, enable **Conversational AI**, and create RESTful API credentials
-   (Customer ID + Secret).
-2. **Murf**: create an API key and choose a voice ID.
-3. **Public URL**: Agora's cloud must reach your `/chat/completions`, so localhost does not work:
-   ```bash
-   cloudflared tunnel --url http://localhost:8000      # or: ngrok http 8000
-   ```
-   Put the https URL in `PUBLIC_BASE_URL`, then restart uvicorn.
-4. Open the app (localhost is fine for the browser), click the mic, and talk.
+| Setting | Where to get it |
+|---|---|
+| `LLM_*` (+ optional `LLM2_*` failover) | Groq or Gemini key (free tiers work); any OpenAI-compatible API |
+| `AGORA_APP_ID`, `AGORA_APP_CERTIFICATE` | Agora Console → Projects |
+| `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET` | Agora Console → RESTful API Keys |
+| `MURF_API_KEY` | murf.ai → API dashboard |
+| `SLACK_WEBHOOK_URL` (optional) | api.slack.com/apps → app → Incoming Webhooks |
+| `BRAIN_API_KEY` | Any password you choose; Agora uses it to call the brain |
 
-### ⚠ Check against the official docs (unverified field names)
-`backend/agora.py` builds the agent "join" request. The Murf `tts.params` field names
-(`api_key`, `voice_id`, `model`, `locale`) were **not checked against the docs**. Compare them
-with [Agora's Murf page](https://docs.agora.io/en/ai/models/tts/murf) and
-[Murf's Agora guide](https://murf.ai/api/docs/integrations/agora). Fix them without editing code:
-- `AGORA_TTS_PARAMS_JSON={"...": "..."}` replaces the Murf params.
-- `AGORA_JOIN_OVERRIDES_JSON={"properties": {...}}` is deep-merged into the whole join body.
+Health check: **http://localhost:8000/api/diag** shows each model, the tunnel and missing settings.
+See [DEMO_DAY.md](DEMO_DAY.md) for the checklist before presenting.
 
-If the agent fails to start, the Agora error appears in the call panel and in the activity feed.
-
-## LLM choice and rate limits (important for demo day)
-Tested end to end with Groq `openai/gpt-oss-120b`: each voice turn takes about 1.3 to 2.7 s
-including tool calls. **Groq's free tier allows only about 8k tokens per minute per model**, and
-one voice turn can use 2 to 4 model calls. The brain therefore switches to `LLM_FALLBACK_MODELS`
-immediately when a model is rate-limited, and then to an optional second provider (`LLM2_*`,
-e.g. Cerebras free tier). Calls with invented tool names are retried on the next model. For the live demo, use a paid key (Groq Dev Tier, or
-OpenAI `gpt-4o-mini`, about $1 for the whole hackathon) so the judges never hit a limit.
-
-## Safety: human in the loop
-Orders, closing tickets and urgent escalations never run straight away. They create a pending
-action, and the technician must say yes. As a code-level guard, `confirm_action` refuses to
-execute if the technician's last words were a refusal ("no", "don't", "wait", "cancel"),
-even if the LLM approves.
+## Reliability notes
+- **Free LLM tiers** have small per-minute limits. The brain fails over instantly to the next model or provider, skips models that are throttled, gone or hanging, and keeps prompts small.
+- **Agora sends extra fields** on messages; they're stripped before calling the LLM. Gemini's thought signatures are kept for Gemini and removed for other providers.
+- **Repeated sentences** (Agora resends speech that arrives in pieces) can't duplicate orders, reports or revisits.
 
 ## MCP
 ```bash
-mcp dev backend/mcp_server.py          # inspect and call the tools in MCP Inspector
+mcp dev backend/mcp_server.py      # inspect and call the 10 tools in MCP Inspector
 ```
-or add to any MCP client: `{"command": "python", "args": ["-m", "backend.mcp_server"]}`.
 
 ## Tests
 ```bash
-pytest -q        # no keys needed; the LLM is faked
+pytest -q        # 21 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout
 ```
+run_demo.py        one-command demo launcher (tunnel + server + browser)
 backend/
-  main.py          HTTP API + serves the web app
-  brain.py         system prompt, live context (memory), tool loop, SSE streaming
-  tools.py         enterprise tools + confirmation gate (shared by brain and MCP)
+  main.py          HTTP API, /chat/completions for Agora, /api/diag, serves the web app
+  brain.py         prompt, live context, tool loop, streaming, failover, speech cleanup
+  tools.py         enterprise tools, confirmation gate, safety guards
   rag.py           manual search
-  db.py            SQLite stand-in for CMMS / ERP / inventory, with demo seed data
+  db.py            SQLite stand-in for CMMS / ERP / inventory, demo seed data
   agora.py         RTC tokens, start/stop the Conversational AI agent, Murf TTS config
-  integrations.py  Slack (falls back to dashboard-only when not configured)
+  integrations.py  Slack webhook
   mcp_server.py    MCP server over the same tools
-  manuals/         service manuals used for RAG (add .md files here)
-frontend/          index.html, app.js, styles.css (Agora Web SDK from CDN)
+  manuals/         service manuals used for RAG
+frontend/          voice call panel + live dashboard (Agora Web SDK)
 tests/
 ```
 
-## Ideas if time allows
-- Swap SQLite tickets for real **Jira / Linear** and inventory for **Google Sheets** (same function signatures in `tools.py`).
-- Hindi / Kannada voice (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
-- Camera: technician shows the error display, and a vision model reads the code.
+## What's next
+- Live connectors for Jira / ServiceNow / SAP (same function signatures in `tools.py`).
+- Hindi and Kannada voice for technicians (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
+- Camera: the technician shows the error display, and a vision model reads the code.
+- Offline queue for sites with no signal.

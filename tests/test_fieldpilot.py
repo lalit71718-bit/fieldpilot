@@ -275,3 +275,11 @@ def test_units_split_across_stream_chunks(monkeypatch):
     monkeypatch.setattr(brain, "_targets", lambda: [(Split(), "m")])
     r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
     assert r.json()["reply"] == "It should be 40.5 microfarad at least."
+
+
+def test_run_demo_finds_tunnel_url():
+    import run_demo
+    lines = ["2026 INF Requesting new quick Tunnel on trycloudflare.com...",
+             "2026 INF |  https://happy-tiger-walks-moon.trycloudflare.com  |"]
+    assert run_demo.find_tunnel_url(iter(lines)) == "https://happy-tiger-walks-moon.trycloudflare.com"
+    assert run_demo.find_tunnel_url(iter(["no url here"])) is None
