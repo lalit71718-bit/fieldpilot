@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FieldPilot Expert Line</title>
+  <title>HomePilot Family Call</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.22.0/AgoraRTC_N-production.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo">FP</span> FieldPilot <small>expert line</small></div>
+    <div class="brand"><span class="logo">HP</span> HomePilot <small>family call</small></div>
     <div class="chips"><span id="status" class="chip">Not in call</span></div>
   </header>
   <main class="expert-wrap">
     <div class="card">
-      <h3>A technician needs your help</h3>
-      <div id="ticket" class="ticket muted">Loading the job...</div>
+      <h3>Anika invited you to a call</h3>
+      <div id="ticket" class="ticket muted">Loading...</div>
     </div>
     <div id="insight" class="insight-banner hidden"></div>
     <div class="card">
       <h3>Live voice call</h3>
-      <p class="muted">You'll join the same Agora call as the technician and the FieldPilot AI. Allow the microphone when asked.</p>
+      <p class="muted">You'll join the same live Agora call as Anika and the HomePilot assistant. Allow the microphone when asked.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button id="join" class="big">Join call</button>
         <button id="mute" class="ghost big hidden">Mute</button>
@@ -36,19 +36,19 @@ const others = new Set();
 
 async function loadJob() {
   const s = await (await fetch("/api/state")).json();
-  const t = s.tickets.find((x) => x.id === s.active_ticket) || s.tickets[0];
-  if (t) {
-    $("ticket").classList.remove("muted");
-    $("ticket").innerHTML = `<div class="title">${esc(t.id)} · ${esc(t.title)}</div>
-      <div class="kv"><span>Asset <b>${esc(t.asset_name)} (${esc(t.model)})</b></span><span>Site <b>${esc(t.site)}</b></span><span>Status <b>${esc(t.status)}</b></span></div>
-      ${t.notes ? `<div class="notes">${esc(t.notes.trim())}</div>` : ""}`;
-  }
+  const a = s.appliance, bk = s.bookings[0];
+  const now = new Date(s.now.replace(" ", "T"));
+  const next = s.events.filter((e) => new Date(e.start_at.replace(" ", "T")) >= now).slice(0, 3);
+  $("ticket").classList.remove("muted");
+  $("ticket").innerHTML = `${a ? `<div class="title">${esc(a.name)} needs attention</div>` : `<div class="title">Family plan</div>`}
+    ${bk ? `<div class="notes">Technician booked: ${esc(bk.provider)}, ${esc(bk.slot_at.slice(0, 16))}</div>` : ""}
+    <div class="kv">${next.map((e) => `<span>${esc(e.start_at.slice(11, 16))} <b>${esc(e.title)}</b></span>`).join("")}</div>`;
   $("insight").classList.toggle("hidden", !s.insight);
   if (s.insight) $("insight").innerHTML = `<b>Repeat fault: ${esc(s.insight.code)} &times;${s.insight.previous + 1}</b> · ${esc(s.insight.likely_root_cause)}`;
 }
 
 function updateWho() {
-  $("who").textContent = rtc ? `In the call with ${others.size} other participant(s): technician and FieldPilot AI.` : "";
+  $("who").textContent = rtc ? `In the call with ${others.size} other participant(s): Anika and the HomePilot assistant.` : "";
 }
 
 $("join").onclick = async () => {

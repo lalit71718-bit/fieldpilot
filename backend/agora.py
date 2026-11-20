@@ -1,6 +1,6 @@
 """Agora: RTC tokens + starting/stopping the Conversational AI agent.
 
-The agent joins the same RTC channel as the technician's browser. Agora handles speech-to-text,
+The agent joins the same RTC channel as the user's browser. Agora handles speech-to-text,
 turn-taking and interruptions, calls OUR /chat/completions as its LLM, and speaks the reply with
 Murf Falcon TTS.
 
@@ -66,7 +66,7 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
     # Fresh agent uid each start, so a leftover agent from an earlier run never conflicts.
     agent_uid = random.randint(100_000, 999_999)
     body = {
-        "name": f"fieldpilot-{uuid.uuid4().hex[:8]}",
+        "name": f"homepilot-{uuid.uuid4().hex[:8]}",
         "properties": {
             "channel": channel,
             "token": rtc_token(agent_uid, channel),
@@ -79,10 +79,10 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
                 "api_key": config.BRAIN_API_KEY,
                 "vendor": "custom",
                 "style": "openai",
-                "system_messages": [{"role": "system", "content": "FieldPilot"}],
+                "system_messages": [{"role": "system", "content": "HomePilot"}],
                 "max_history": 24,
                 "greeting_message": tools.shift_briefing(),
-                "failure_message": "Sorry, I lost connection to our systems for a moment.",
+                "failure_message": "Sorry, I lost connection for a moment.",
                 "params": {"model": config.LLM_MODEL},
             },
             "tts": murf_tts(),

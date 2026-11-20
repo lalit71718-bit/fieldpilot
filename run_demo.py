@@ -1,4 +1,4 @@
-"""One command to start FieldPilot for a demo:
+"""One command to start HomePilot for a demo:
 
     python run_demo.py
 
@@ -89,7 +89,7 @@ def main() -> None:
               "text mode still works.")
     app = f"http://localhost:{PORT}"
     print("\n" + "=" * 60)
-    print(f"  FieldPilot is running:  {app}")
+    print(f"  HomePilot is running:  {app}")
     print(f"  Health check:           {app}/api/diag")
     print("  Press Ctrl+C to stop.")
     print("=" * 60 + "\n")

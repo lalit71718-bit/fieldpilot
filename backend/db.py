@@ -1,5 +1,5 @@
-"""SQLite store that stands in for the company's enterprise systems
-(ticketing/CMMS, inventory/ERP, notifications). Reset it any time with reset_db()."""
+"""SQLite store that stands in for the family's connected services (calendar, tasks,
+shopping list, appliance records, service booking, notifications). Reset with reset_db()."""
 import json
 import sqlite3
 import threading
@@ -10,26 +10,28 @@ from . import config
 _lock = threading.RLock()
 
 SCHEMA = """
-CREATE TABLE technicians (id TEXT PRIMARY KEY, name TEXT, region TEXT, base_warehouse TEXT,
-    supervisor_name TEXT, supervisor_channel TEXT, preferences TEXT);
-CREATE TABLE assets (id TEXT PRIMARY KEY, name TEXT, model TEXT, site TEXT, installed_on TEXT,
-    warranty_until TEXT);
-CREATE TABLE asset_history (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT, date TEXT,
-    technician TEXT, summary TEXT);
-CREATE TABLE tickets (id TEXT PRIMARY KEY, asset_id TEXT, technician_id TEXT, title TEXT,
-    description TEXT, priority TEXT, status TEXT, opened_at TEXT, sla_due TEXT, notes TEXT);
-CREATE TABLE parts (sku TEXT PRIMARY KEY, name TEXT, compatible_models TEXT, unit_price INTEGER);
-CREATE TABLE stock (sku TEXT, warehouse TEXT, qty INTEGER, eta_hours INTEGER,
-    PRIMARY KEY (sku, warehouse));
-CREATE TABLE orders (id TEXT PRIMARY KEY, ticket_id TEXT, sku TEXT, qty INTEGER, warehouse TEXT,
-    total INTEGER, status TEXT, eta TEXT, created_at TEXT);
+CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT, role TEXT, age INTEGER, notes TEXT);
+CREATE TABLE household (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, member TEXT,
+    start_at TEXT, minutes INTEGER, location TEXT, source TEXT);
+CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, assignee TEXT, due_at TEXT,
+    status TEXT, created_at TEXT, done_at TEXT);
+CREATE TABLE shopping (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, note TEXT,
+    status TEXT, created_at TEXT);
+CREATE TABLE appliances (id TEXT PRIMARY KEY, name TEXT, model TEXT, room TEXT,
+    installed_on TEXT, warranty_until TEXT);
+CREATE TABLE appliance_history (id INTEGER PRIMARY KEY AUTOINCREMENT, appliance_id TEXT,
+    date TEXT, by_whom TEXT, summary TEXT);
+CREATE TABLE slots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT, rating REAL,
+    fee INTEGER, slot_at TEXT, available INTEGER);
+CREATE TABLE bookings (id TEXT PRIMARY KEY, appliance_id TEXT, provider TEXT, slot_at TEXT,
+    fee INTEGER, status TEXT, created_at TEXT);
+CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, member TEXT,
+    remind_at TEXT, status TEXT, created_at TEXT);
 CREATE TABLE pending_actions (id TEXT PRIMARY KEY, kind TEXT, payload TEXT, summary TEXT,
     status TEXT, created_at TEXT);
 CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT, recipient TEXT,
     message TEXT, delivered INTEGER, created_at TEXT);
-CREATE TABLE followups (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, when_at TEXT,
-    purpose TEXT, created_at TEXT);
-CREATE TABLE reports (id TEXT PRIMARY KEY, ticket_id TEXT, body TEXT, created_at TEXT);
 CREATE TABLE activity (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, kind TEXT, title TEXT,
     detail TEXT);
 CREATE TABLE memory (key TEXT PRIMARY KEY, value TEXT);
@@ -44,52 +46,87 @@ def iso(dt: datetime) -> str:
     return dt.isoformat(sep=" ")
 
 
+def _daytime(dt: datetime) -> datetime:
+    """Move a time into family-friendly hours (9 AM to 6 PM), next day if needed."""
+    dt = dt.replace(minute=dt.minute - dt.minute % 30, second=0, microsecond=0)
+    if dt.hour < 9:
+        return dt.replace(hour=9, minute=0)
+    if dt.hour >= 18:
+        return (dt + timedelta(days=1)).replace(hour=10, minute=0)
+    return dt
+
+
 def _seed(c: sqlite3.Connection) -> None:
+    """A fictional family. Times are relative to now (kept in daytime), so the demo works at
+    any hour: the best technician slot always clashes with Dadi's appointment, the next is free."""
     t = now()
-    c.executemany("INSERT INTO technicians VALUES (?,?,?,?,?,?,?)", [
-        ("T-07", "Ravi", "Bengaluru East", "Whitefield", "Priya (Service Manager)", "#field-ops",
-         json.dumps({"language": "English", "style": "short step-by-step instructions",
-                     "units": "metric"})),
+    hour = t.replace(minute=0, second=0)
+    rohan_call = _daytime(hour + timedelta(hours=1))
+    doctor = _daytime(hour + timedelta(hours=3))
+    if doctor <= rohan_call + timedelta(hours=1):
+        doctor = rohan_call + timedelta(hours=2)
+    free_slot = doctor + timedelta(hours=2, minutes=30)
+    if free_slot.hour >= 19:
+        free_slot = (free_slot + timedelta(days=1)).replace(hour=14, minute=0)
+    tomorrow = (t + timedelta(days=1)).replace(hour=9, minute=0, second=0)
+    if tomorrow.date() == doctor.date():
+        tomorrow = tomorrow + timedelta(days=1)
+    late = t.replace(hour=21, minute=0, second=0)
+    if late <= t:
+        late = late + timedelta(days=1)
+    c.executemany("INSERT INTO members VALUES (?,?,?,?,?)", [
+        ("anika", "Anika", "you (parent)", 38, "Works from home on weekdays"),
+        ("rohan", "Rohan", "spouse", 40, "Drives past FreshMart on the way home"),
+        ("kabir", "Kabir", "son", 10, "Football practice on Saturdays"),
+        ("dadi", "Dadi", "grandmother", 72, "Blood pressure tablet at 8 PM daily"),
     ])
-    c.executemany("INSERT INTO assets VALUES (?,?,?,?,?,?)", [
-        ("A-CH-03", "Chiller 3", "CoolMax CX-300", "Prestige Tech Park, Tower B, Whitefield",
-         "2021-03-14", "2026-03-13"),
-        ("A-DG-01", "DG Set 1", "PowerGen PG-50", "Embassy Tech Square, Block C, Marathahalli",
-         "2022-08-02", "2027-08-01"),
+    c.executemany("INSERT INTO household VALUES (?,?)", [
+        ("diet", "vegetarian household"),
+        ("grocery_store", "FreshMart, Indiranagar"),
+        ("repair_budget", "under 1,500 rupees per visit unless approved"),
+        ("quiet_hours", "no service visits after 8 PM"),
+        ("family_channel", "#family"),
     ])
-    c.executemany("INSERT INTO asset_history (asset_id,date,technician,summary) VALUES (?,?,?,?)", [
-        ("A-CH-03", iso(t - timedelta(days=210))[:10], "Ravi",
-         "Quarterly service. Condenser coil cleaned, refrigerant pressure normal."),
-        ("A-CH-03", iso(t - timedelta(days=64))[:10], "Suresh",
-         "Error E4 twice in one week. Condenser fan run capacitor measured 38 uF (rated 45). "
-         "Advised replacement, part not available on van."),
-        ("A-CH-03", iso(t - timedelta(days=20))[:10], "Ravi",
-         "Customer reported warm air in afternoon. Reset unit, E4 cleared after reset."),
-        ("A-DG-01", iso(t - timedelta(days=30))[:10], "Ravi",
-         "250-hour service. Oil and fuel filter replaced."),
+    c.executemany("INSERT INTO events (title,member,start_at,minutes,location,source) "
+                  "VALUES (?,?,?,?,?,?)", [
+        ("Dadi's doctor appointment (BP check-up)", "dadi", iso(doctor),
+         90, "Sunrise Clinic", "family calendar"),
+        ("Kabir football practice", "kabir", iso(tomorrow), 120, "HAL ground", "family calendar"),
+        ("Rohan: team call", "rohan", iso(rohan_call), 60, "home office",
+         "family calendar"),
     ])
-    c.executemany("INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?,?)", [
-        ("TK-1042", "A-CH-03", "T-07", "Chiller 3 tripping with error E4",
-         "Server room cooling unit trips every afternoon with E4 (high discharge pressure). "
-         "Customer escalated: server room temperature reached 29 C.",
-         "high", "open", iso(t - timedelta(hours=3)), iso(t + timedelta(hours=5)), ""),
-        ("TK-1043", "A-DG-01", "T-07", "DG set low coolant warning",
-         "Low coolant warning shown during weekly test run.",
-         "medium", "open", iso(t - timedelta(hours=26)), iso(t + timedelta(hours=22)), ""),
+    c.executemany("INSERT INTO tasks (title,assignee,due_at,status,created_at) "
+                  "VALUES (?,?,?,?,?)", [
+        ("Take out the recycling", "kabir", iso(t + timedelta(hours=3)), "open", iso(t)),
+        ("Pay electricity bill", "rohan", iso(t + timedelta(days=2)), "open", iso(t)),
     ])
-    c.executemany("INSERT INTO parts VALUES (?,?,?,?)", [
-        ("CAP-45", "Condenser fan run capacitor 45/5 uF", "CoolMax CX-300", 1200),
-        ("FAN-CX", "Condenser fan motor 1/2 HP", "CoolMax CX-300", 8500),
-        ("PSW-HP", "High pressure switch", "CoolMax CX-300", 2300),
-        ("CLT-5L", "Coolant concentrate 5 L", "PowerGen PG-50", 1800),
+    c.executemany("INSERT INTO shopping (item,note,status,created_at) VALUES (?,?,?,?)", [
+        ("Bananas", "", "needed", iso(t)),
     ])
-    c.executemany("INSERT INTO stock VALUES (?,?,?,?)", [
-        ("CAP-45", "Whitefield", 0, 4), ("CAP-45", "HSR Layout", 2, 18), ("CAP-45", "Peenya", 6, 30),
-        ("FAN-CX", "Whitefield", 1, 4), ("FAN-CX", "Peenya", 2, 30),
-        ("PSW-HP", "Whitefield", 3, 4),
-        ("CLT-5L", "Whitefield", 10, 4),
+    c.executemany("INSERT INTO appliances VALUES (?,?,?,?,?,?)", [
+        ("AC-LIVING", "Living room AC", "CoolMax CS-18 split AC", "living room",
+         "2022-04-10", "2027-04-09"),
+        ("WM-01", "Washing machine", "AquaWash 7 kg front load", "utility",
+         "2023-01-15", "2026-01-14"),
     ])
-    c.execute("INSERT INTO memory VALUES ('active_ticket', '')")
+    c.executemany("INSERT INTO appliance_history (appliance_id,date,by_whom,summary) "
+                  "VALUES (?,?,?,?)", [
+        ("AC-LIVING", iso(t - timedelta(days=200))[:10], "CoolCare technician",
+         "Annual service. Filters and coils cleaned. All normal."),
+        ("AC-LIVING", iso(t - timedelta(days=64))[:10], "CoolCare technician",
+         "Error E4 and warm air. Outdoor fan capacitor measured weak. Advised replacement, "
+         "family postponed it."),
+        ("AC-LIVING", iso(t - timedelta(days=18))[:10], "Rohan",
+         "E4 again in the afternoon. Switched off and on at the breaker, it cleared."),
+        ("WM-01", iso(t - timedelta(days=90))[:10], "Anika", "Drain filter cleaned."),
+    ])
+    c.executemany("INSERT INTO slots (provider,rating,fee,slot_at,available) VALUES (?,?,?,?,?)", [
+        ("CoolCare Services", 4.7, 499, iso(doctor), 1),            # clashes with the doctor
+        ("CoolCare Services", 4.7, 499, iso(free_slot), 1),         # best free slot
+        ("QuickFix Home", 4.3, 399, iso(tomorrow + timedelta(hours=3)), 1),
+        ("QuickFix Home", 4.3, 399, iso(late), 1),                  # after 8 PM quiet hours
+    ])
+    c.execute("INSERT INTO memory VALUES ('active_appliance', '')")
 
 
 def connect() -> sqlite3.Connection:
@@ -107,7 +144,7 @@ def conn() -> sqlite3.Connection:
     if _conn is None:
         _conn = connect()
         exists = _conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tickets'").fetchone()
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='members'").fetchone()
         if not exists:
             reset_db()
     return _conn

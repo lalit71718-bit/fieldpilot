@@ -1,4 +1,4 @@
-"""FieldPilot enterprise tools exposed over MCP (Model Context Protocol).
+"""HomePilot household tools exposed over MCP (Model Context Protocol).
 
 Any MCP client can use the same actions the voice agent uses, e.g.:
     mcp dev backend/mcp_server.py          # MCP Inspector
@@ -12,7 +12,7 @@ except ImportError:  # mcp 1.x
 
 from . import tools
 
-mcp = FastMCP("fieldpilot")
+mcp = FastMCP("homepilot")
 
 for _name, (_fn, _schema) in tools.TOOLS.items():
     mcp.add_tool(_fn, name=_name, description=_schema["description"])

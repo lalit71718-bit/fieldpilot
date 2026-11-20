@@ -1,4 +1,4 @@
-"""FieldPilot backend.
+"""HomePilot backend.
 
   POST /chat/completions   custom LLM endpoint that Agora Conversational AI calls (OpenAI format)
   GET  /api/config         what the browser needs to join the Agora channel
@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import agora, brain, config, db, tools
 
-app = FastAPI(title="FieldPilot")
+app = FastAPI(title="HomePilot")
 
 
 def _check_key(authorization: str | None) -> None:
@@ -81,21 +81,23 @@ async def text_chat(request: Request):
 
 @app.get("/api/state")
 def state():
+    active = db.recall("active_appliance")
     return {
-        "technician": db.one("SELECT id, name, region, supervisor_name FROM technicians"),
-        "active_ticket": db.recall("active_ticket"),
-        "tickets": db.q("SELECT t.*, a.name AS asset_name, a.model, a.site FROM tickets t "
-                        "JOIN assets a ON a.id=t.asset_id ORDER BY t.id"),
-        "stock": db.q("SELECT s.sku, p.name, s.warehouse, s.qty FROM stock s "
-                      "JOIN parts p ON p.sku=s.sku ORDER BY s.sku, s.eta_hours"),
-        "orders": db.q("SELECT * FROM orders ORDER BY created_at DESC"),
+        "members": db.q("SELECT * FROM members"),
+        "household": db.q("SELECT * FROM household"),
+        "events": db.q("SELECT * FROM events ORDER BY start_at"),
+        "tasks": db.q("SELECT * FROM tasks ORDER BY status DESC, due_at"),
+        "shopping": db.q("SELECT * FROM shopping WHERE status='needed' ORDER BY id"),
+        "appliance": db.one("SELECT * FROM appliances WHERE id=?", (active,)) if active else None,
+        "history": db.q("SELECT * FROM appliance_history WHERE appliance_id=? ORDER BY date DESC",
+                        (active,)) if active else [],
+        "bookings": db.q("SELECT * FROM bookings ORDER BY created_at DESC"),
+        "reminders": db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at"),
         "pending": db.q("SELECT * FROM pending_actions WHERE status='awaiting_confirmation'"),
         "notifications": db.q("SELECT * FROM notifications ORDER BY id DESC LIMIT 10"),
-        "followups": db.q("SELECT * FROM followups ORDER BY when_at"),
-        "reports": db.q("SELECT * FROM reports ORDER BY created_at DESC"),
-        "activity": db.q("SELECT * FROM activity ORDER BY id DESC LIMIT 60"),
-        "insight": tools.fault_insight(db.recall("active_ticket"))
-                   if db.recall("active_ticket") else None,
+        "activity": db.q("SELECT * FROM activity WHERE kind NOT IN ('tool','llm') "
+                         "ORDER BY id DESC LIMIT 120"),
+        "insight": tools.fault_insight(active) if active else None,
         "expert_called": bool(db.recall("expert_call")),
         "now": db.iso(db.now()),
     }

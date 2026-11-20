@@ -1,69 +1,73 @@
-# FieldPilot: hands-free voice copilot for field technicians
+# HomePilot: the voice assistant that runs the family's day
 
-> **Build with Agora, Bengaluru 2026** · Track **PS-2: From Workplace Assistance to Intelligent Action** (Field Technician Copilot)
+> **Build with Agora, Bengaluru 2026** · Track **PS-1: Real-Time Conversational AI Meets Agentic Workflows** (AI Family Assistant)
 >
 > 🎥 **Demo video:** [add link] · 📊 **Pitch deck:** [add link] · 👥 **Team SpeakX:** Lalit Kumar Singh
 
-A technician fixing a broken machine has both hands busy. They just **talk**. FieldPilot pulls up
-their ticket and the machine's history, walks them through the repair using the service manual,
-finds the spare part across warehouses, orders it **only after the technician says yes**, updates
-the ticket, writes the service report, messages the supervisor on Slack and books the revisit.
+Anika just **talks**. HomePilot knows the family's calendar, chores and preferences. When the
+living-room AC throws error E4 for the third time, it spots the repeat fault, walks her through a
+safe check from the manual, finds a technician slot that **doesn't clash with Dadi's doctor visit**,
+books it **only after she says yes**, puts it on the family calendar with a reminder, adds groceries
+to the shopping list, asks Rohan to pick them up, reminds Dadi about her BP tablet, ticks off
+Kabir's chore and sends everyone an update. It can even bring Rohan into the live voice call.
 
-![FieldPilot dashboard after a full voice run](docs/dashboard.png)
+![HomePilot dashboard after a full voice run](docs/dashboard.png)
 
-## How it meets the hackathon requirements
+## How it meets the problem statement
 
-| Requirement | How FieldPilot does it |
+| PS-1 asks for | HomePilot |
 |---|---|
-| **Real-time conversational AI** | Agora **Conversational AI** agent in an Agora **RTC** channel: speech-to-text, turn-taking, barge-in. It calls our backend as a custom LLM. |
-| **Natural voice** | **Murf Falcon TTS** speaks every reply. A short filler ("One sec, checking stock") covers tool calls, so there's no dead air. |
-| **Agentic workflow** | 10 tools: tickets, asset history, manual search (RAG), inventory, part orders, ticket updates, Slack, follow-ups, service reports. Also exposed as an **MCP server**. |
-| **End-to-end journey** | *Before:* assigned tickets and history. *During:* voice troubleshooting from the manual. *Action:* stock check, order, ticket update. *After:* report, supervisor update, revisit booked. |
-| **Confirm critical actions** | Orders, closing tickets and urgent escalations wait for a spoken **yes**. "No" is enforced in code, even if the model says approve. |
-| **Contextual intelligence** | Live memory each turn: technician, active ticket, pending approvals, placed orders. Points out repeat faults from the machine's history. |
-| **Error handling** | Out-of-stock at the nearest warehouse → best alternative. Invalid or repeated actions are blocked (no double orders). LLM failover across providers. |
-| **Predictive insight** | Spots **repeat faults** from the asset history (E4 for the third time, capacitor flagged but never replaced) and steers to the root cause; the insight also lands in the service report. |
-| **Human escalation over Agora** | "Get me a senior engineer": FieldPilot posts a join link to Slack, and the expert joins the **same live Agora call** as the technician and the AI, from their phone (`/expert.html`). |
-| **Proactive start** | The agent opens with a **shift briefing**: open jobs, top priority, SLA countdown. KPI strip on the dashboard. |
-| **Measurable efficiency** | The dashboard's "Paperwork saved" counter estimates minutes saved per visit from the actions the agent took. |
+| **Before:** retrieve schedules, pending tasks, preferences | `get_today` + a spoken **daily briefing** when the call starts: calendar, open chores, reminders, shopping list, household preferences (vegetarian, budget, quiet hours, Dadi's medicine) |
+| **During:** understand priorities, coordinate by conversation | Contextual memory every turn (family, active issue, pending approvals). Appliance help from the **owner's manual (RAG)** plus **repeat-fault detection** from service history |
+| **Action:** calendars, shopping lists, tasks, service requests via APIs | `find_service_slots` checks technicians **against the family calendar and quiet hours**; `book_service` (needs a spoken yes); `add_event`, `add_to_shopping_list`, `assign_task` (notifies the person on Slack) |
+| **After:** reminders, completion tracking, follow-ups | Booking adds a calendar event and a reminder 30 minutes before; `set_reminder` (Dadi's medicine), `complete_task`, `daily_summary` posted to the family channel |
+| **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
+| **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
+| **Tool calling, memory, external APIs** | 14 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+
+## Safety and reliability
+- **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
+- **No double actions:** repeated sentences can't book twice, add duplicate items or re-send the summary.
+- **Never invents times:** reminders and events only use a time the user actually said.
+- **LLM failover:** instant switch across models and providers (Groq, Gemini) when one is rate-limited, slow or gone.
 
 ## Architecture
 
 ```
- Technician (browser mic, live dashboard)
-        │  Agora RTC audio
-        ▼
+ Anika (browser mic, live family dashboard)        Rohan (phone, /expert.html)
+        │  Agora RTC audio                               │  joins the same channel
+        ▼                                                ▼
  Agora Conversational AI agent ── speech-to-text, turn-taking, interruptions
-        │  OpenAI-format POST /chat/completions (public URL via Cloudflare tunnel)
+        │  OpenAI-format POST /chat/completions
         ▼
- FieldPilot brain (FastAPI)
-   ├─ brain.py       tool-calling loop, streams the reply (SSE), LLM failover, speech cleanup
-   ├─ memory         live context every turn: technician, active ticket, pending approvals
-   ├─ rag.py         BM25 search over equipment service manuals
-   ├─ tools.py       10 enterprise tools + confirmation gate + "no means no" guard
+ HomePilot brain (FastAPI)
+   ├─ brain.py       tool-calling loop, streamed replies, failover, speech cleanup
+   ├─ memory         family, preferences, active issue, pending approvals (every turn)
+   ├─ rag.py         search over appliance owner's manuals
+   ├─ tools.py       14 household tools + confirmation gate + "no means no" guard
    └─ mcp_server.py  the same tools over MCP
         │
-        ▼ reply text
- Murf Falcon TTS (via Agora) ──► technician hears the answer
- Slack incoming webhook ──► supervisor's channel
+        ▼ reply text → Murf Falcon TTS (via Agora) → spoken answer
+ Slack incoming webhook → #family channel
 ```
 
 ## Demo script
 
-Click **Reset demo** first. Say each line in one go, then wait for the answer.
+Click **Reset demo**, then the mic. HomePilot opens with the day's briefing.
 
-| Step | Technician says | What happens on screen |
+| Step | Anika says | What happens on screen |
 |---|---|---|
-| Initiate | "What's my first job?" | `get_my_tickets` → TK-1042, Chiller 3, error E4, high priority |
-| Understand | "I'm at the chiller, it shows E4 again. What should I check?" | `get_ticket` (same E4 two months ago, weak capacitor) + `search_manual` → one safe step at a time |
-| Diagnose | "I measured the capacitor, it reads thirty seven." | Manual: replace below 40.5 microfarad |
-| Execute | "Do we have a replacement?" | `check_inventory`: nearest warehouse **out of stock**, HSR Layout has 2 |
-| Confirm | "Yes, order it." → **"Yes."** | Yellow approval banner → `confirm_action` → PO-5001, stock 2 → 1, ticket "waiting for parts" |
-| Follow up | "Wrap it up. I'll come back tomorrow at ten thirty. Send the report and tell Priya." | `schedule_followup`, `generate_service_report`, Slack message |
+| Before | "What's on today?" | Calendar, open chores, shopping list |
+| During | "The living room AC is showing E four again and blowing warm air." | Blue **Repeat fault: E4 ×3** banner; one safe check from the manual |
+| Action | "The outdoor fan isn't spinning. Can you get someone to fix it?" | Skips the slot that clashes with Dadi's doctor visit, prepares the best one → yellow approval banner |
+| Confirm | "Yes." | Booking BK-7001, calendar event, reminder 30 minutes before |
+| Action | "Add milk, paneer and Dadi's BP tablets to the shopping list, and ask Rohan to pick them up on his way home." | Shopping list + task for Rohan + Slack message |
+| After | "Remind Dadi to take her BP tablet at 8 PM." | Reminder |
+| After | "Kabir already took out the recycling." | Chore ticked off |
+| After | "That's all. Send the family an update." | Family summary on Slack |
+| Wow | "Get Rohan on this call." | Slack join link → Rohan joins the live call from his phone |
 
-Safety moment for judges: at the yellow banner say **"No"**. The order is cancelled and stock doesn't change.
-
-Wow moment: say **"I'm stuck, get a senior engineer on this call."** A Slack message with a join link arrives; open it on a phone, tap **Join call**, and the expert talks with the technician while FieldPilot listens and keeps working.
+Safety moment: at the yellow banner say **"No, don't book it"**. Nothing is booked.
 
 ## Run it
 
@@ -76,8 +80,8 @@ python run_demo.py
 ```
 
 `run_demo.py` starts a Cloudflare tunnel, passes its address to the server automatically, checks it
-works and opens the app. You need `cloudflared` (`winget install --id Cloudflare.cloudflared`).
-Without voice keys, the **text box** still runs the full agent.
+works and opens the app (needs `cloudflared`: `winget install --id Cloudflare.cloudflared`).
+Without voice keys, the **text box** still runs the full assistant.
 
 | Setting | Where to get it |
 |---|---|
@@ -86,52 +90,42 @@ Without voice keys, the **text box** still runs the full agent.
 | `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET` | Agora Console → RESTful API Keys |
 | `MURF_API_KEY` | murf.ai → API dashboard |
 | `SLACK_WEBHOOK_URL` (optional) | api.slack.com/apps → app → Incoming Webhooks |
-| `BRAIN_API_KEY` | Any password you choose; Agora uses it to call the brain |
+| `BRAIN_API_KEY` | Any password you choose |
 
 ### Deploy online (Render, free)
-1. render.com → sign in with GitHub → **New + → Blueprint** → pick this repo (it reads `render.yaml`).
-2. Paste the secret values it asks for (LLM, Agora, Murf, Slack keys) → **Apply**.
-3. Open `https://<your-service>.onrender.com`. The public address is detected automatically, so no tunnel is needed.
+1. render.com → **New + → Blueprint** → pick this repo (it reads `render.yaml`).
+2. Paste the secret values it asks for → **Apply**.
+3. Open `https://<your-service>.onrender.com`. The public address is detected automatically.
 
-Free instances sleep after ~15 minutes idle: open the link a minute before presenting.
+Free instances sleep after about 15 minutes idle: open the link a minute before presenting.
+Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 
-Health check: **http://localhost:8000/api/diag** shows each model, the tunnel and missing settings.
-See [DEMO_DAY.md](DEMO_DAY.md) for the checklist before presenting.
-
-## Reliability notes
-- **Free LLM tiers** have small per-minute limits. The brain fails over instantly to the next model or provider, skips models that are throttled, gone or hanging, and keeps prompts small.
-- **Agora sends extra fields** on messages; they're stripped before calling the LLM. Gemini's thought signatures are kept for Gemini and removed for other providers.
-- **Repeated sentences** (Agora resends speech that arrives in pieces) can't duplicate orders, reports or revisits.
-
-## MCP
+## MCP and tests
 ```bash
-mcp dev backend/mcp_server.py      # inspect and call the 10 tools in MCP Inspector
-```
-
-## Tests
-```bash
-pytest -q        # 23 tests, no keys needed (the LLM is faked)
+mcp dev backend/mcp_server.py      # inspect the 14 household tools in MCP Inspector
+pytest -q                          # 22 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout
 ```
 run_demo.py        one-command demo launcher (tunnel + server + browser)
+render.yaml        one-click Render deploy
 backend/
-  main.py          HTTP API, /chat/completions for Agora, /api/diag, serves the web app
+  main.py          HTTP API, /chat/completions for Agora, /api/state, /api/diag
   brain.py         prompt, live context, tool loop, streaming, failover, speech cleanup
-  tools.py         enterprise tools, confirmation gate, safety guards
+  tools.py         household tools, confirmation gate, safety guards
   rag.py           manual search
-  db.py            SQLite stand-in for CMMS / ERP / inventory, demo seed data
+  db.py            SQLite stand-in for calendar, tasks, shopping, appliance records, bookings
   agora.py         RTC tokens, start/stop the Conversational AI agent, Murf TTS config
-  integrations.py  Slack webhook
+  integrations.py  Slack webhook (family channel)
   mcp_server.py    MCP server over the same tools
-  manuals/         service manuals used for RAG
-frontend/          voice call panel + live dashboard (Agora Web SDK)
+  manuals/         appliance owner's manuals used for RAG
+frontend/          voice panel + live family dashboard; expert.html = join-the-call page
 tests/
 ```
 
 ## What's next
-- Live connectors for Jira / ServiceNow / SAP (same function signatures in `tools.py`).
-- Hindi and Kannada voice for technicians (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
-- Camera: the technician shows the error display, and a vision model reads the code.
-- Offline queue for sites with no signal.
+- Real integrations: Google Calendar, WhatsApp, a grocery delivery API, Urban Company-style service booking.
+- Hindi and Kannada voices for grandparents (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
+- Smart-home (IoT) hooks: read the AC's error code directly instead of asking.
+- Proactive calls: HomePilot rings Dadi at 8 PM for her medicine and logs that she took it.

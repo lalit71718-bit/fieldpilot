@@ -1,12 +1,18 @@
-"""The agent's tools. Each tool is a plain Python function plus an OpenAI-style JSON schema.
+"""HomePilot's tools: plain Python functions plus OpenAI-style JSON schemas.
 
 The same functions are used by:
   * brain.py      - the LLM tool-calling loop behind Agora's custom LLM endpoint
-  * mcp_server.py - an MCP server, so any MCP client (Claude Desktop, MCP Inspector, other
-                    agents) can use the same enterprise actions.
+  * mcp_server.py - an MCP server, so any MCP client can use the same household actions.
 
-Critical actions (ordering parts, closing tickets) never execute directly: they create a
-pending action and the technician must say yes, which the model passes to confirm_action."""
+Before / During / Action / After (the PS-1 workflow):
+  get_today, get_appliance, search_manual         -> schedules, tasks, preferences, knowledge
+  find_service_slots, book_service, add_event,     -> calendar, service requests,
+  add_to_shopping_list, assign_task                    shopping list, tasks
+  set_reminder, complete_task, send_family_update  -> reminders, completion, follow-ups
+  call_family_member                               -> a family member joins the live Agora call
+
+Critical actions (paid service bookings, urgent alerts) never execute directly: they create a
+pending action and the user must say yes, which the model passes to confirm_action."""
 import json
 import re
 import uuid
@@ -15,47 +21,113 @@ from datetime import datetime, timedelta
 from . import config, db, integrations, rag
 
 
+# ---------------------------------------------------------------- helpers
+
 def _spoken_time(dt: datetime) -> str:
     """'Friday at 3:25 PM' (portable: '%-I' crashes on Windows)."""
     hour = dt.strftime("%I").lstrip("0") or "12"
-    return f"{dt.strftime('%A')} at {hour}:{dt.strftime('%M %p')}".replace(":00 ", " ")
+    day = "today" if dt.date() == db.now().date() else (
+        "tomorrow" if dt.date() == db.now().date() + timedelta(days=1) else dt.strftime("%A"))
+    return f"{day} at {hour}:{dt.strftime('%M %p')}".replace(":00 ", " ")
 
 
-def _tech() -> dict:
-    return db.one("SELECT * FROM technicians WHERE id=?", (config.DEFAULT_TECHNICIAN_ID,)) or {}
+def _dt(s: str) -> datetime:
+    return datetime.fromisoformat(s)
 
 
-def _ticket_or_error(ticket_id: str) -> dict | None:
-    return db.one("SELECT * FROM tickets WHERE id=?", (ticket_id.strip().upper(),))
+def _parse_when(when: str) -> datetime | str:
+    """Local ISO time from the model; converts UTC/offsets. Returns an error string if bad."""
+    try:
+        dt = datetime.fromisoformat(when.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return "Give the time as a local ISO date-time, e.g. 2026-11-21T18:30."
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.replace(second=0, microsecond=0)
 
 
-# ---------------------------------------------------------------- read tools (Before / Understand)
+def _member(name: str) -> dict | None:
+    key = (name or "").strip().lower()
+    for m in db.q("SELECT * FROM members"):
+        if key in (m["id"], m["name"].lower()) or (key and key in m["role"].lower()):
+            return m
+    if key in ("me", "myself", "i", "mom", "mum", "mother"):
+        return db.one("SELECT * FROM members WHERE id='anika'")
+    if key in ("dad", "father", "husband"):
+        return db.one("SELECT * FROM members WHERE id='rohan'")
+    if key in ("grandma", "granny", "grandmother", "nani", "amma"):
+        return db.one("SELECT * FROM members WHERE id='dadi'")
+    return None
 
-def get_my_tickets() -> dict:
-    """Open tickets assigned to the technician, highest priority first."""
-    rows = db.q(
-        "SELECT t.id, t.title, t.priority, t.status, t.sla_due, a.name AS asset, a.site "
-        "FROM tickets t JOIN assets a ON a.id=t.asset_id WHERE t.technician_id=? "
-        "AND t.status NOT IN ('resolved','closed') "
-        "ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, t.sla_due",
-        (config.DEFAULT_TECHNICIAN_ID,))
-    return {"technician": _tech().get("name"), "open_tickets": rows}
+
+def _appliance(name: str) -> dict | None:
+    key = (name or "").strip().lower()
+    for a in db.q("SELECT * FROM appliances"):
+        hay = f"{a['id']} {a['name']} {a['model']} {a['room']}".lower()
+        if key and (key == a["id"].lower() or all(w in hay for w in key.split()
+                                                  if w not in ("the", "my", "our"))):
+            return a
+    if any(w in key for w in ("ac", "air", "cooler")):
+        return db.one("SELECT * FROM appliances WHERE id='AC-LIVING'")
+    if "wash" in key:
+        return db.one("SELECT * FROM appliances WHERE id='WM-01'")
+    return None
 
 
-def get_ticket(ticket_id: str) -> dict:
-    """Full ticket with asset details and maintenance history. Makes it the active ticket."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
-        return {"error": f"Ticket {ticket_id} not found."}
-    asset = db.one("SELECT * FROM assets WHERE id=?", (t["asset_id"],))
-    history = db.q("SELECT date, technician, summary FROM asset_history WHERE asset_id=? "
-                   "ORDER BY date DESC", (t["asset_id"],))
-    orders = db.q("SELECT id, sku, qty, warehouse, status, eta FROM orders WHERE ticket_id=?",
-                  (t["id"],))
-    db.remember("active_ticket", t["id"])
-    db.log("lookup", f"Opened {t['id']}", t["title"])
-    out = {"ticket": t, "asset": asset, "maintenance_history": history, "orders": orders}
-    insight = fault_insight(t["id"])
+def _clashes(start: datetime, minutes: int) -> list[dict]:
+    end = start + timedelta(minutes=minutes)
+    out = []
+    for e in db.q("SELECT * FROM events"):
+        s = _dt(e["start_at"])
+        if s < end and start < s + timedelta(minutes=e["minutes"]):
+            out.append(e)
+    return out
+
+
+def _household() -> dict:
+    return {r["key"]: r["value"] for r in db.q("SELECT * FROM household")}
+
+
+# ---------------------------------------------------------------- Before: context
+
+def get_today() -> dict:
+    """Today's family schedule, pending tasks, reminders, shopping list and preferences."""
+    now = db.now()
+    horizon = now + timedelta(hours=30)
+    events = [e for e in db.q("SELECT title, member, start_at, minutes, location FROM events "
+                              "ORDER BY start_at") if now - timedelta(hours=1) <= _dt(e["start_at"]) <= horizon]
+    for e in events:
+        e["when"] = _spoken_time(_dt(e["start_at"]))
+    tasks = db.q("SELECT id, title, assignee, due_at FROM tasks WHERE status='open' ORDER BY due_at")
+    reminders = db.q("SELECT text, member, remind_at FROM reminders WHERE status='scheduled' "
+                     "ORDER BY remind_at")
+    shopping = [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")]
+    members = db.q("SELECT name, role, notes FROM members")
+    db.log("lookup", "Read today's family plan", f"{len(events)} events, {len(tasks)} tasks")
+    return {"now": _spoken_time(now), "events_next_30h": events, "open_tasks": tasks,
+            "reminders": reminders, "shopping_list": shopping, "family": members,
+            "preferences": _household()}
+
+
+# ---------------------------------------------------------------- During: home issues
+
+def get_appliance(appliance: str) -> dict:
+    """Appliance details and service history. Makes it the active home issue."""
+    a = _appliance(appliance)
+    if not a:
+        return {"error": f"No appliance matching '{appliance}'.",
+                "known": [x["name"] for x in db.q("SELECT name FROM appliances")]}
+    history = db.q("SELECT date, by_whom, summary FROM appliance_history WHERE appliance_id=? "
+                   "ORDER BY date DESC", (a["id"],))
+    bookings = db.q("SELECT id, provider, slot_at, status FROM bookings WHERE appliance_id=?",
+                    (a["id"],))
+    db.remember("active_appliance", a["id"])
+    if _codes_in(db.recall("last_user_text")):
+        db.remember("issue_text", db.recall("last_user_text"))
+    db.log("lookup", f"Opened {a['name']}", a["model"])
+    out = {"appliance": a, "service_history": history, "bookings": bookings,
+           "in_warranty": a["warranty_until"] >= db.now().date().isoformat()}
+    insight = fault_insight(a["id"])
     if insight:
         out["insight"] = insight
         db.log("insight", f"Repeat fault: {insight['code']} x{insight['previous'] + 1}",
@@ -63,115 +135,86 @@ def get_ticket(ticket_id: str) -> dict:
     return out
 
 
-def fault_insight(ticket_id: str) -> dict | None:
-    """Spot a repeat fault: the ticket's error code already appears in the asset's history."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
+NUM_WORDS = {"ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4", "FIVE": "5", "SIX": "6",
+             "SEVEN": "7", "EIGHT": "8", "NINE": "9"}
+
+
+def _codes_in(text: str) -> list[str]:
+    """Error codes in speech-to-text output: 'E4', 'e four', 'E-4', 'E 4'."""
+    t = text.upper().replace("-", " ")
+    for w, d in NUM_WORDS.items():
+        t = re.sub(rf"\b([A-Z])\s+{w}\b", rf"\g<1>{d}", t)
+    return [c.replace(" ", "") for c in re.findall(r"\b([A-Z]{1,2}\s?\d)\b", t)]
+
+
+def fault_insight(appliance_id: str, extra_text: str = "") -> dict | None:
+    """Spot a repeat fault: the reported error code already appears in the service history."""
+    a = db.one("SELECT * FROM appliances WHERE id=?", (appliance_id,)) if appliance_id else None
+    if not a:
         return None
-    m = re.search(r"\b([EWF]\d{1,3})\b", f"{t['title']} {t['description']}")
-    if not m:
+    history = db.q("SELECT date, summary FROM appliance_history WHERE appliance_id=? ORDER BY date",
+                   (a["id"],))
+    seen = " ".join(h["summary"] for h in history)
+    said = f"{extra_text} {db.recall('issue_text')} {db.recall('last_user_text')}"
+    code = next((c for c in _codes_in(said) if re.search(rf"\b{c}\b", seen)), None)
+    if not code:  # nothing matching was said: use the most recent code in the history
+        found = re.findall(r"\b(E\d)\b", seen)
+        code = found[-1] if found else None
+    if not code:
         return None
-    code = m.group(1)
-    past = [h for h in db.q("SELECT date, summary FROM asset_history WHERE asset_id=? "
-                            "ORDER BY date", (t["asset_id"],))
-            if re.search(rf"\b{code}\b", h["summary"])]
-    if not past:
-        return None
-    parts = sorted({p["sku"] for p in db.q("SELECT sku, name FROM parts")
-                    for h in past if p["name"].split()[-3].lower() in h["summary"].lower()})
-    cause = ("the condenser fan capacitor, flagged before but never replaced"
+    past = [h for h in history if re.search(rf"\b{code}\b", h["summary"])]
+    cause = ("the outdoor fan capacitor, flagged by the technician but never replaced"
              if any("capacitor" in h["summary"].lower() for h in past) else "unclear from history")
     days = (db.now().date() - datetime.fromisoformat(past[0]["date"]).date()).days
     return {"code": code, "previous": len(past), "first_seen_days_ago": days,
-            "likely_root_cause": cause, "related_parts": parts,
-            "summary": (f"{code} has occurred {len(past)} times before on this asset in the last "
-                        f"{days} days. Likely root cause: {cause}. Fix the cause, not just reset."),
-            "recommendation": "Replace the part rather than resetting, and add a preventive "
-                              "check at the next quarterly service."}
-
-
-def shift_briefing() -> str:
-    """Spoken greeting when the agent joins: open jobs, top priority, SLA."""
-    tech = _tech()
-    jobs = get_my_tickets()["open_tickets"]
-    name = tech.get("name", "there")
-    if not jobs:
-        return f"Hi {name}, FieldPilot here. You have no open jobs right now."
-    top = jobs[0]
-    hours = (datetime.fromisoformat(top["sla_due"]) - db.now()).total_seconds() / 3600
-    sla = (f"SLA in about {round(hours)} hours" if hours >= 1.5 else
-           "SLA due within the hour" if hours > 0 else "SLA already breached")
-    count = "one open job" if len(jobs) == 1 else f"{len(jobs)} open jobs"
-    return (f"Hi {name}, FieldPilot here. You have {count}. First is {top['asset']} at "
-            f"{top['site'].split(',')[0]}, {top['title'].split(' with ')[-1]}, "
-            f"{top['priority']} priority, {sla}. Tell me when you're on site.")
-
-
-def call_expert(reason: str, ticket_id: str = "") -> dict:
-    """Invite a senior engineer into this live voice call (Agora RTC) via a Slack link."""
-    tech = _tech()
-    base = config.PUBLIC_BASE_URL or "http://localhost:8000"
-    link = f"{base}/expert.html"
-    ticket = ticket_id or db.recall("active_ticket")
-    text = (f":telephone_receiver: LIVE CALL REQUEST{(' [' + ticket + ']') if ticket else ''}: "
-            f"{tech.get('name')} needs a senior engineer: {reason}\nJoin the call now: {link}")
-    delivered = integrations.send_slack(text, tech.get("supervisor_channel", "#field-ops"))
-    db.run("INSERT INTO memory VALUES ('expert_call', ?) ON CONFLICT(key) DO UPDATE SET "
-           "value=excluded.value", (db.iso(db.now()),))
-    db.log("expert", "Expert invited to live call", reason)
-    return {"status": "invited", "join_link": link,
-            "delivery": "Slack" if delivered else "dashboard only (Slack not configured)",
-            "say": "Tell the technician an expert has been invited and will join this call."}
+            "likely_root_cause": cause,
+            "summary": (f"{code} has happened {len(past)} times before on the {a['name']} "
+                        f"in the last {days} days. Likely root cause: {cause}."),
+            "recommendation": "Fix the cause instead of resetting the breaker again: book a "
+                              "technician to replace the part."}
 
 
 def search_manual(query: str) -> dict:
-    """Search the equipment service manuals (RAG)."""
+    """Search the appliance owner's manuals (RAG)."""
     hits = [{"section": h["section"], "text": h["text"]} for h in rag.search(query, k=2)]
     db.log("knowledge", "Searched manuals", query)
     return {"results": hits} if hits else {"results": [], "note": "Nothing relevant found."}
 
 
-def check_inventory(part: str) -> dict:
-    """Stock of a part (SKU or name words) in every warehouse, nearest to the technician first."""
-    term = part.strip()
-    parts = db.q("SELECT * FROM parts WHERE sku=? COLLATE NOCASE", (term,))
-    if not parts:
-        words = [w for w in term.lower().replace("-", " ").split() if len(w) > 2]
-        parts = [p for p in db.q("SELECT * FROM parts")
-                 if words and all(w in (p["name"] + " " + p["sku"]).lower() for w in words)]
-        if not parts:
-            parts = [p for p in db.q("SELECT * FROM parts")
-                     if any(w in (p["name"] + " " + p["sku"]).lower() for w in words)]
-    if not parts:
-        return {"error": f"No part matching '{part}'.",
-                "known_parts": db.q("SELECT sku, name FROM parts")}
-    base = _tech().get("base_warehouse", "")
-    out = []
-    for p in parts[:3]:
-        stock = db.q("SELECT warehouse, qty, eta_hours FROM stock WHERE sku=? "
-                     "ORDER BY eta_hours", (p["sku"],))
-        available = [s for s in stock if s["qty"] > 0]
-        best = available[0] if available else None
-        if not best:
-            advice = "Out of stock everywhere. Offer to escalate to the supervisor."
-        elif best["warehouse"] == base:
-            advice = f"Order from {base}, delivery in about {best['eta_hours']} hours."
-        else:
-            advice = (f"{base} (nearest) has none. Best option: {best['warehouse']} with "
-                      f"{best['qty']} in stock, delivery in about {best['eta_hours']} hours.")
-        out.append({
-            "sku": p["sku"], "name": p["name"], "unit_price_inr": p["unit_price"],
-            "fits": p["compatible_models"],
-            # Only warehouses that actually have it, so the model can't pick an empty one.
-            "in_stock_at": available,
-            "out_of_stock_at": [s["warehouse"] for s in stock if s["qty"] <= 0],
-            "recommendation": advice,
-        })
-    db.log("inventory", f"Checked stock: {parts[0]['sku']}", part)
-    return {"parts": out}
+# ---------------------------------------------------------------- Action: service requests
 
+def find_service_slots(appliance: str = "") -> dict:
+    """Technician slots for an appliance, checked against the family calendar and preferences."""
+    a = _appliance(appliance) if appliance else db.one(
+        "SELECT * FROM appliances WHERE id=?", (db.recall("active_appliance") or "AC-LIVING",))
+    prefs = _household()
+    now = db.now()
+    options = []
+    for s in db.q("SELECT * FROM slots WHERE available=1 ORDER BY slot_at"):
+        start = _dt(s["slot_at"])
+        if start < now:
+            continue
+        clash = _clashes(start, 60)
+        problems = [f"clashes with {c['title']}" for c in clash]
+        if start.hour >= 20:
+            problems.append("after the family's 8 PM quiet hours")
+        options.append({"provider": s["provider"], "rating": s["rating"], "fee_inr": s["fee"],
+                        "slot_at": s["slot_at"], "when": _spoken_time(start),
+                        "ok": not problems, "problems": problems})
+    good = [o for o in options if o["ok"]]
+    best = max(good, key=lambda o: (o["rating"], -_dt(o["slot_at"]).timestamp())) if good else None
+    skipped = [f"{o['provider']} {o['when']} {' and '.join(o['problems'])}"
+               for o in options if not o["ok"] and "clashes" in " ".join(o["problems"])]
+    advice = (f"{skipped[0][0].upper() + skipped[0][1:]}, so skip it. " if skipped else "")
+    advice += (f"Best: {best['provider']} {best['when']}, rating {best['rating']}, visit fee "
+               f"{best['fee_inr']} rupees." if best else "No slot fits the family's calendar.")
+    db.log("calendar", "Checked technician slots vs family calendar", advice)
+    return {"appliance": a["name"] if a else None, "options": options,
+            "recommendation": advice, "budget": prefs.get("repair_budget"),
+            "next_step": ("Now call book_service for the best slot. It only prepares the "
+                          "booking; then tell the user the clash you skipped and ask one yes/no "
+                          "question.") if best else "Ask the user for another day."}
 
-# ---------------------------------------------------------------- action tools (Execute)
 
 def _pending(kind: str, payload: dict, summary: str) -> dict:
     # Re-asking for the same action reuses the open request instead of creating a duplicate.
@@ -179,9 +222,7 @@ def _pending(kind: str, payload: dict, summary: str) -> dict:
                   "AND status='awaiting_confirmation'", (kind, json.dumps(payload)))
     if same:
         return {"status": "awaiting_confirmation", "action_id": same["id"], "summary": summary,
-                "instruction": "Already prepared. If the technician has agreed, call "
-                               "confirm_action now with this action_id."}
-    # A new request of the same kind replaces older unanswered ones.
+                "instruction": "Already prepared. If the user has agreed, call confirm_action now."}
     db.run("UPDATE pending_actions SET status='superseded' WHERE kind=? "
            "AND status='awaiting_confirmation'", (kind,))
     action_id = "ACT-" + uuid.uuid4().hex[:5].upper()
@@ -190,68 +231,34 @@ def _pending(kind: str, payload: dict, summary: str) -> dict:
             db.iso(db.now())))
     db.log("confirm", "Waiting for confirmation", summary)
     return {"status": "awaiting_confirmation", "action_id": action_id, "summary": summary,
-            "instruction": "Read the summary to the technician and ask for a yes or no. "
-                           "Then call confirm_action with this action_id."}
+            "instruction": "Read the summary and ask for a yes or no. Nothing has happened yet."}
 
 
-def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1,
-                       additional: bool = False) -> dict:
-    """Prepare a spare part order. Needs the technician's confirmation before it is placed."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
-        return {"error": f"Ticket {ticket_id} not found."}
-    p = db.one("SELECT * FROM parts WHERE sku=? COLLATE NOCASE", (sku,))
-    if not p:
-        return {"error": f"Unknown part {sku}."}
-    existing = db.one("SELECT id, eta FROM orders WHERE ticket_id=? AND sku=? AND status='placed'",
-                      (t["id"], p["sku"]))
-    if existing and not additional:
-        # Guard against double orders (a repeated "yes", or the model re-preparing an order).
-        return {"status": "already_ordered", "order_id": existing["id"], "eta": existing["eta"],
-                "note": "This part is already on order for this ticket. Do not order again "
-                        "unless the technician explicitly asks for an additional unit "
-                        "(then call again with additional=true)."}
-    s = db.one("SELECT * FROM stock WHERE sku=? AND warehouse=? COLLATE NOCASE",
-               (p["sku"], warehouse))
-    if not s or s["qty"] < qty:
-        alts = db.q("SELECT warehouse, qty, eta_hours FROM stock WHERE sku=? AND qty>=? "
-                    "ORDER BY eta_hours", (p["sku"], qty))
-        return {"error": f"{warehouse} does not have {qty} x {p['sku']} in stock.",
-                "alternatives": alts}
-    eta = db.now() + timedelta(hours=s["eta_hours"])
-    total = p["unit_price"] * qty
-    summary = (f"Order {qty} {p['name'].split(' ' + p['name'].split()[-2])[0].lower()} "
-               f"from {s['warehouse']}, {total:,} rupees, arriving "
-               f"{_spoken_time(eta)}.")
-    return _pending("order_part", {"ticket_id": t["id"], "sku": p["sku"],
-                                   "warehouse": s["warehouse"], "qty": qty,
-                                   "total": total, "eta": db.iso(eta.replace(second=0))},
-                    summary)
-
-
-def update_ticket(ticket_id: str, status: str = "", note: str = "") -> dict:
-    """Add a work note and/or change status. Closing (resolved) needs confirmation."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
-        return {"error": f"Ticket {ticket_id} not found."}
-    status = status.strip().lower()
-    allowed = {"", "in_progress", "waiting_for_parts", "resolved"}
-    if status not in allowed:
-        return {"error": f"Status must be one of {sorted(allowed - {''})}."}
-    if status == "resolved":
-        return _pending("resolve_ticket", {"ticket_id": t["id"], "note": note},
-                        f"Mark ticket {t['id']} as resolved" + (f" with note: {note}" if note else "."))
-    _apply_ticket_update(t["id"], status, note)
-    return {"status": "updated", "ticket_id": t["id"], "new_status": status or t["status"]}
-
-
-def _apply_ticket_update(ticket_id: str, status: str, note: str) -> None:
-    t = _ticket_or_error(ticket_id)
-    notes = t["notes"] or ""
-    if note:
-        notes += f"[{db.now().strftime('%H:%M')}] {note}\n"
-    db.run("UPDATE tickets SET status=?, notes=? WHERE id=?", (status or t["status"], notes, t["id"]))
-    db.log("ticket", f"Updated {t['id']}", (f"status -> {status}. " if status else "") + note)
+def book_service(provider: str, slot_at: str, appliance: str = "") -> dict:
+    """Prepare a paid technician booking. Needs the user's yes before it is placed."""
+    a = _appliance(appliance) if appliance else db.one(
+        "SELECT * FROM appliances WHERE id=?", (db.recall("active_appliance") or "AC-LIVING",))
+    if not a:
+        return {"error": f"No appliance matching '{appliance}'."}
+    when = _parse_when(slot_at)
+    if isinstance(when, str):
+        return {"error": when}
+    existing = db.one("SELECT id, slot_at FROM bookings WHERE appliance_id=? AND status='booked'",
+                      (a["id"],))
+    if existing:
+        return {"status": "already_booked", "booking_id": existing["id"],
+                "when": _spoken_time(_dt(existing["slot_at"])),
+                "note": "A technician is already booked for this. Do not book again."}
+    s = db.one("SELECT * FROM slots WHERE provider LIKE ? AND slot_at=? AND available=1",
+               (f"%{provider.split()[0]}%", db.iso(when)))
+    if not s:
+        return {"error": "That slot isn't available. Call find_service_slots and pick one."}
+    clash = _clashes(when, 60)
+    if clash:
+        return {"error": f"That time clashes with {clash[0]['title']}. Pick another slot."}
+    summary = (f"Book {s['provider']} for the {a['name']} {_spoken_time(when)}, "
+               f"visit fee {s['fee']} rupees.")
+    return _pending("book_service", {"appliance_id": a["id"], "slot_id": s["id"]}, summary)
 
 
 def confirm_action(action_id: str, approved: bool) -> dict:
@@ -264,152 +271,246 @@ def confirm_action(action_id: str, approved: bool) -> dict:
     if approved and _said_no(db.recall("last_user_text")):
         # Code-level guard: the model may misread a refusal, the system never will.
         approved = False
-        db.log("confirm", "Blocked: technician said no", db.recall("last_user_text"))
+        db.log("confirm", "Blocked: user said no", db.recall("last_user_text"))
     if not approved:
         db.run("UPDATE pending_actions SET status='cancelled' WHERE id=?", (a["id"],))
-        db.log("confirm", "Cancelled by technician", a["summary"])
+        db.log("confirm", "Cancelled by user", a["summary"])
         return {"status": "cancelled", "action_id": a["id"]}
     p = json.loads(a["payload"])
-    result: dict
-    if a["kind"] == "order_part":
-        s = db.one("SELECT qty FROM stock WHERE sku=? AND warehouse=?", (p["sku"], p["warehouse"]))
-        if not s or s["qty"] < p["qty"]:
-            return {"error": "Stock changed, the part is no longer available there."}
-        order_id = "PO-" + str(5000 + len(db.q("SELECT id FROM orders")) + 1)
-        db.run("UPDATE stock SET qty=qty-? WHERE sku=? AND warehouse=?",
-               (p["qty"], p["sku"], p["warehouse"]))
-        db.run("INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?)",
-               (order_id, p["ticket_id"], p["sku"], p["qty"], p["warehouse"], p["total"],
-                "placed", p["eta"], db.iso(db.now())))
-        _apply_ticket_update(p["ticket_id"], "waiting_for_parts",
-                             f"Ordered {p['qty']} x {p['sku']} ({order_id}) from {p['warehouse']}.")
-        db.log("order", f"Order {order_id} placed", a["summary"])
-        result = {"status": "done", "order_id": order_id, "eta": p["eta"],
-                  "ticket_status": "waiting_for_parts"}
-    elif a["kind"] == "escalate":
-        sent = _send_supervisor(p["message"], p.get("ticket_id", ""), urgent=True)
-        result = {"status": "done", "delivery": sent["status"], "to": sent["to"]}
-    elif a["kind"] == "resolve_ticket":
-        _apply_ticket_update(p["ticket_id"], "resolved", p.get("note", ""))
-        result = {"status": "done", "ticket_id": p["ticket_id"], "ticket_status": "resolved"}
+    if a["kind"] == "book_service":
+        s = db.one("SELECT * FROM slots WHERE id=? AND available=1", (p["slot_id"],))
+        if not s:
+            return {"error": "That slot was just taken. Find another."}
+        app = db.one("SELECT * FROM appliances WHERE id=?", (p["appliance_id"],))
+        bid = "BK-" + str(7000 + len(db.q("SELECT id FROM bookings")) + 1)
+        start = _dt(s["slot_at"])
+        db.run("UPDATE slots SET available=0 WHERE id=?", (s["id"],))
+        db.run("INSERT INTO bookings VALUES (?,?,?,?,?,?,?)",
+               (bid, app["id"], s["provider"], s["slot_at"], s["fee"], "booked", db.iso(db.now())))
+        # Automation: the booking lands on the family calendar with a reminder before it.
+        db.run("INSERT INTO events (title,member,start_at,minutes,location,source) "
+               "VALUES (?,?,?,?,?,?)", (f"{app['name']} repair: {s['provider']}", "anika",
+                                        s["slot_at"], 60, "home", f"booking {bid}"))
+        db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+               (f"{s['provider']} technician arrives in 30 minutes ({bid})", "anika",
+                db.iso(start - timedelta(minutes=30)), "scheduled", db.iso(db.now())))
+        db.log("booking", f"Booked {bid}: {s['provider']}", a["summary"])
+        db.log("calendar", "Added to family calendar", f"{app['name']} repair {_spoken_time(start)}")
+        result = {"status": "done", "booking_id": bid, "when": _spoken_time(start),
+                  "also_done": "added to the family calendar with a reminder 30 minutes before"}
+    elif a["kind"] == "urgent_alert":
+        sent = _send_family(p["message"], urgent=True)
+        result = {"status": "done", "delivery": sent}
     else:
         return {"error": f"Unknown action kind {a['kind']}."}
     db.run("UPDATE pending_actions SET status='done' WHERE id=?", (a["id"],))
     return result
 
 
-NO_WORDS = {"no", "nope", "nah", "don't", "dont", "do not", "cancel", "stop", "wait", "not",
+NO_WORDS = {"no", "nope", "nah", "don't", "dont", "cancel", "stop", "wait", "not",
             "never", "hold", "nahi", "mat"}
-YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go", "haan", "ha", "confirm",
-             "please", "proceed", "correct", "right", "do it", "go ahead", "order", "send"}
+# Only explicit agreement counts as yes: "No, don't book it" must stay a no.
+YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "haan", "confirm", "proceed",
+             "correct", "absolutely"}
 
 
 def _said_no(text: str) -> bool:
     words = set(text.lower().replace(",", " ").replace(".", " ").replace("!", " ").split())
     phrase = " ".join(text.lower().split())
     neg = bool(words & NO_WORDS) or "do not" in phrase
-    pos = bool(words & YES_WORDS) or "do it" in phrase or "go ahead" in phrase
+    pos = bool(words & YES_WORDS) or "go ahead" in phrase or "do it" in phrase.replace("don't do it", "")
     return neg and not pos
 
 
-def notify_supervisor(message: str, ticket_id: str = "", urgent: bool = False) -> dict:
-    """Send a message to the supervisor's Slack. Urgent escalations need confirmation."""
-    if urgent:
-        return _pending("escalate", {"message": message, "ticket_id": ticket_id},
-                        f"Send an urgent escalation to your supervisor: {message}")
-    return _send_supervisor(message, ticket_id, urgent=False)
+# ---------------------------------------------------------------- Action: family logistics
+
+TIME_WORDS = ("tomorrow", "today", "tonight", "morning", "afternoon", "evening", "noon",
+              "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+              "next week", "o'clock", "thirty", "ten", "eleven", "twelve", "nine", "eight",
+              "seven", "six", "five", "four", "three", "two", "one", "kal", "am", "pm", "daily")
 
 
-def _send_supervisor(message: str, ticket_id: str, urgent: bool) -> dict:
-    tech = _tech()
-    prefix = ":rotating_light: ESCALATION " if urgent else ":wrench: "
-    text = f"{prefix}{('[' + ticket_id + '] ') if ticket_id else ''}{message} - {tech.get('name')}"
-    delivered = integrations.send_slack(text, tech.get("supervisor_channel", "#field-ops"))
-    db.log("notify", "Escalated to supervisor" if urgent else "Supervisor notified", message)
-    return {"status": "sent" if delivered else "recorded (Slack not configured)",
-            "to": tech.get("supervisor_name")}
-
-
-TIME_WORDS = ("tomorrow", "today", "morning", "afternoon", "evening", "noon", "monday",
-              "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "next week",
-              "o'clock", "thirty", "ten", "eleven", "twelve", "nine", "eight", "kal", "am", "pm")
-
-
-def schedule_followup(ticket_id: str, when: str, purpose: str) -> dict:
-    """Schedule (or move) the revisit for a ticket. `when` is LOCAL time, e.g. 2026-11-21T10:30."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
-        return {"error": f"Ticket {ticket_id} not found."}
+def _time_said() -> bool:
     said = db.recall("last_user_text").lower()
-    if said and not any(w in said for w in TIME_WORDS) and not any(c.isdigit() for c in said):
-        return {"error": "The technician has not said a time. Ask when they will come back."}
-    try:
-        dt = datetime.fromisoformat(when.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return {"error": "Give `when` as a local ISO date-time, e.g. 2026-11-21T10:30."}
-    if dt.tzinfo is not None:  # model sent UTC or an offset: convert to local wall-clock time
-        dt = dt.astimezone().replace(tzinfo=None)
-    dt = dt.replace(second=0, microsecond=0)
-    if dt < db.now() - timedelta(minutes=5):
-        return {"error": "That time is in the past."}
-    existing = db.one("SELECT id, when_at FROM followups WHERE ticket_id=? AND when_at>=? "
-                      "ORDER BY when_at", (t["id"], db.iso(db.now())))
-    nice = dt.strftime("%a %d %b %I:%M %p")
-    if existing:
-        # One upcoming visit per ticket: a second booking moves it instead of duplicating.
-        if existing["when_at"] == db.iso(dt):
-            return {"status": "already_scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
-        db.run("UPDATE followups SET when_at=?, purpose=? WHERE id=?",
-               (db.iso(dt), purpose, existing["id"]))
-        db.log("schedule", f"Follow-up moved to {nice}", purpose)
-        return {"status": "rescheduled", "ticket_id": t["id"], "when": db.iso(dt)}
-    db.run("INSERT INTO followups (ticket_id,when_at,purpose,created_at) VALUES (?,?,?,?)",
-           (t["id"], db.iso(dt), purpose, db.iso(db.now())))
-    db.log("schedule", f"Follow-up booked {nice}", purpose)
-    return {"status": "scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
+    return not said or any(w in said for w in TIME_WORDS) or any(c.isdigit() for c in said)
 
 
-def generate_service_report(ticket_id: str, findings: str, actions_taken: str,
-                            next_steps: str = "") -> dict:
-    """Write the service report for a visit, store it on the ticket and share it."""
-    t = _ticket_or_error(ticket_id)
-    if not t:
-        return {"error": f"Ticket {ticket_id} not found."}
-    recent = db.one("SELECT id FROM reports WHERE ticket_id=? AND created_at>=? ORDER BY "
-                    "created_at DESC", (t["id"], db.iso(db.now() - timedelta(minutes=3))))
-    if recent:  # repeated request (e.g. the same sentence sent twice): don't spam Slack
-        return {"status": "already_created", "report_id": recent["id"],
-                "shared_with": _tech().get("supervisor_name")}
-    asset = db.one("SELECT * FROM assets WHERE id=?", (t["asset_id"],))
-    orders = db.q("SELECT id, sku, qty, warehouse, eta FROM orders WHERE ticket_id=?", (t["id"],))
-    fups = db.q("SELECT when_at, purpose FROM followups WHERE ticket_id=?", (t["id"],))
-    tech = _tech()
-    lines = [
-        f"SERVICE REPORT {t['id']}  ({db.now().strftime('%d %b %Y %H:%M')})",
-        f"Technician: {tech.get('name')}   Asset: {asset['name']} {asset['model']}",
-        f"Site: {asset['site']}",
-        f"Issue: {t['title']}",
-        f"Findings: {findings}",
-        f"Actions taken: {actions_taken}",
-    ]
-    if orders:
-        lines.append("Parts ordered: " + "; ".join(
-            f"{o['qty']} x {o['sku']} ({o['id']}, {o['warehouse']}, ETA {o['eta']})" for o in orders))
-    if fups:
-        lines.append("Follow-up: " + "; ".join(f"{f['when_at']} - {f['purpose']}" for f in fups))
-    ins = fault_insight(t["id"])
-    if ins:
-        lines.append(f"Repeat fault: {ins['summary']}")
-    if next_steps:
-        lines.append(f"Next steps: {next_steps}")
-    lines.append(f"Status: {_ticket_or_error(t['id'])['status']}")
+def add_event(title: str, start_at: str, member: str = "", minutes: int = 60) -> dict:
+    """Add an event to the family calendar (warns about clashes)."""
+    when = _parse_when(start_at)
+    if isinstance(when, str):
+        return {"error": when}
+    if not _time_said():
+        return {"error": "The user hasn't said a time. Ask when."}
+    clash = _clashes(when, minutes)
+    if clash:
+        return {"status": "clash", "clashes_with": [c["title"] for c in clash],
+                "note": "Tell the user and ask whether to keep both or pick another time."}
+    m = _member(member) if member else None
+    db.run("INSERT INTO events (title,member,start_at,minutes,location,source) VALUES (?,?,?,?,?,?)",
+           (title, m["id"] if m else "family", db.iso(when), minutes, "", "voice"))
+    db.log("calendar", f"Added: {title}", _spoken_time(when))
+    return {"status": "added", "when": _spoken_time(when)}
+
+
+def add_to_shopping_list(items: list[str], note: str = "") -> dict:
+    """Add items to the family shopping list (duplicates are skipped)."""
+    if isinstance(items, str):
+        items = [i.strip() for i in re.split(r",| and ", items) if i.strip()]
+    have = {s["item"].lower() for s in db.q("SELECT item FROM shopping WHERE status='needed'")}
+    added = []
+    for it in items:
+        it = it.strip().rstrip(".")
+        if it and it.lower() not in have:
+            db.run("INSERT INTO shopping (item,note,status,created_at) VALUES (?,?,?,?)",
+                   (it[:1].upper() + it[1:], note, "needed", db.iso(db.now())))
+            have.add(it.lower())
+            added.append(it)
+    if added:
+        db.log("shopping", "Shopping list updated", ", ".join(added))
+    return {"status": "updated", "added": added,
+            "list": [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")],
+            "store": _household().get("grocery_store")}
+
+
+def assign_task(title: str, assignee: str, due_at: str = "") -> dict:
+    """Give a family member a task and notify them on the family channel."""
+    m = _member(assignee)
+    if not m:
+        return {"error": f"Who is '{assignee}'? Family: " +
+                         ", ".join(x["name"] for x in db.q("SELECT name FROM members"))}
+    due = None
+    if due_at:
+        due = _parse_when(due_at)
+        if isinstance(due, str):
+            return {"error": due}
+    dup = db.one("SELECT id FROM tasks WHERE lower(title)=lower(?) AND assignee=? AND status='open'",
+                 (title, m["id"]))
+    if dup:
+        return {"status": "already_assigned", "task_id": dup["id"]}
+    db.run("INSERT INTO tasks (title,assignee,due_at,status,created_at) VALUES (?,?,?,?,?)",
+           (title, m["id"], db.iso(due) if due else None, "open", db.iso(db.now())))
+    when = f" by {_spoken_time(due)}" if due else ""
+    sent = _send_family(f"@{m['name']}: new task from Anika: {title}{when}.")
+    db.log("task", f"Task for {m['name']}", title + when)
+    return {"status": "assigned", "to": m["name"], "notified": sent}
+
+
+def complete_task(task: str) -> dict:
+    """Mark a family task as done (track completion)."""
+    rows = db.q("SELECT * FROM tasks WHERE status='open'")
+    words = [w for w in task.lower().split() if len(w) > 2]
+    match = next((t for t in rows if task.strip() == str(t["id"])), None) or max(
+        rows, key=lambda t: sum(w in t["title"].lower() for w in words), default=None)
+    if not match or not any(w in match["title"].lower() for w in words):
+        return {"error": f"No open task like '{task}'.",
+                "open_tasks": [t["title"] for t in rows]}
+    db.run("UPDATE tasks SET status='done', done_at=? WHERE id=?", (db.iso(db.now()), match["id"]))
+    db.log("task", "Task done", f"{match['title']} ({match['assignee']})")
+    left = db.one("SELECT COUNT(*) AS n FROM tasks WHERE status='open'")["n"]
+    return {"status": "done", "task": match["title"], "open_tasks_left": left}
+
+
+def set_reminder(text: str, at: str, member: str = "") -> dict:
+    """Schedule a reminder for a family member (e.g. medicine)."""
+    if not _time_said():
+        return {"error": "The user hasn't said a time. Ask when."}
+    when = _parse_when(at)
+    if isinstance(when, str):
+        return {"error": when}
+    if when < db.now() - timedelta(minutes=5):
+        when = when + timedelta(days=1)  # "8 PM" said after 8 PM means tomorrow
+    m = _member(member) if member else None
+    who = m["id"] if m else "anika"
+    if db.one("SELECT id FROM reminders WHERE member=? AND remind_at=? AND status='scheduled'",
+              (who, db.iso(when))):
+        return {"status": "already_set", "when": _spoken_time(when)}
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           (text, who, db.iso(when), "scheduled", db.iso(db.now())))
+    db.log("reminder", f"Reminder for {m['name'] if m else 'Anika'}", f"{text}, {_spoken_time(when)}")
+    return {"status": "scheduled", "for": m["name"] if m else "Anika", "when": _spoken_time(when)}
+
+
+def _send_family(message: str, urgent: bool = False) -> str:
+    prefix = ":rotating_light: URGENT " if urgent else ":house: "
+    delivered = integrations.send_slack(prefix + message, _household().get("family_channel",
+                                                                          "#family"))
+    return "Slack" if delivered else "dashboard only (Slack not configured)"
+
+
+def send_family_update(message: str, urgent: bool = False) -> dict:
+    """Post an update to the family channel. Urgent alerts need the user's yes."""
+    if urgent:
+        return _pending("urgent_alert", {"message": message},
+                        f"Send an urgent alert to the whole family: {message}")
+    sent = _send_family(message)
+    db.log("notify", "Family update sent", message)
+    return {"status": "sent", "delivery": sent}
+
+
+def daily_summary() -> dict:
+    """Wrap-up: what got done today, what's still open, what's coming next. Posts to family."""
+    today = db.now().date().isoformat()
+    done = [t["title"] for t in db.q("SELECT title FROM tasks WHERE status='done' AND done_at>=?",
+                                     (today,))]
+    open_t = [f"{t['title']} ({t['assignee']})" for t in
+              db.q("SELECT title, assignee FROM tasks WHERE status='open'")]
+    bookings = [f"{b['provider']} {_spoken_time(_dt(b['slot_at']))} ({b['id']})" for b in
+                db.q("SELECT * FROM bookings WHERE status='booked'")]
+    rem = [f"{r['text']} ({_spoken_time(_dt(r['remind_at']))})" for r in
+           db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at LIMIT 4")]
+    shop = [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")]
+    lines = ["Family update from HomePilot"]
+    if bookings:
+        lines.append("Booked: " + "; ".join(bookings))
+    if done:
+        lines.append("Done: " + "; ".join(done))
+    if open_t:
+        lines.append("Still open: " + "; ".join(open_t))
+    if shop:
+        lines.append("Shopping list: " + ", ".join(shop))
+    if rem:
+        lines.append("Reminders: " + "; ".join(rem))
     body = "\n".join(lines)
-    rid = "SR-" + t["id"].split("-")[-1] + "-" + uuid.uuid4().hex[:3].upper()
-    db.run("INSERT INTO reports VALUES (?,?,?,?)", (rid, t["id"], body, db.iso(db.now())))
-    integrations.send_slack(f":page_facing_up: Service report {rid}\n```{body}```",
-                            tech.get("supervisor_channel", "#field-ops"))
-    db.log("report", f"Report {rid} generated", t["title"])
-    return {"status": "created", "report_id": rid, "shared_with": tech.get("supervisor_name")}
+    recent = db.one("SELECT id FROM notifications WHERE message LIKE ? AND created_at>=?",
+                    (":house: Family update from HomePilot%",
+                     db.iso(db.now() - timedelta(minutes=3))))
+    if not recent:
+        _send_family(body)
+        db.log("notify", "Daily summary sent to family", f"{len(done)} done, {len(open_t)} open")
+    return {"status": "sent", "summary": body}
+
+
+def call_family_member(member: str, reason: str = "") -> dict:
+    """Invite a family member into this live voice call (Agora RTC) with a join link."""
+    m = _member(member)
+    name = m["name"] if m else (member or "family")
+    base = config.PUBLIC_BASE_URL or "http://localhost:8000"
+    link = f"{base}/expert.html"
+    text = (f":telephone_receiver: @{name}, Anika wants you on a live call"
+            f"{': ' + reason if reason else ''}. Join now: {link}")
+    sent = _send_family(text)
+    db.remember("expert_call", db.iso(db.now()))
+    db.log("call", f"{name} invited to live call", reason)
+    return {"status": "invited", "who": name, "join_link": link, "delivery": sent,
+            "say": f"Tell the user {name} has been invited and can join this call from their phone."}
+
+
+def shift_briefing() -> str:
+    """Spoken greeting when the agent joins: the day at a glance."""
+    now = db.now()
+    events = [e for e in db.q("SELECT title, start_at FROM events ORDER BY start_at")
+              if now <= _dt(e["start_at"]) <= now.replace(hour=23, minute=59)]
+    tasks = db.one("SELECT COUNT(*) AS n FROM tasks WHERE status='open'")["n"]
+    part = "Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 17 else "Good evening"
+    if events:
+        first = events[0]
+        ev = (f"Today you have {len(events)} thing{'s' if len(events) > 1 else ''} on the family "
+              f"calendar. Next is {first['title']} {_spoken_time(_dt(first['start_at']))}.")
+    else:
+        ev = "Nothing else is on the family calendar today."
+    return (f"{part} Anika, HomePilot here. {ev} There are {tasks} open family tasks. "
+            "How can I help?")
 
 
 # ---------------------------------------------------------------- registry
@@ -426,44 +527,47 @@ def _s(desc: str, props: dict | None = None, required: list[str] | None = None) 
 
 
 STR = {"type": "string"}
+WHEN = {"type": "string", "description": "Local time, no timezone, e.g. 2026-11-21T18:30"}
 TOOLS = {
-    "get_my_tickets": (get_my_tickets, _s("List the technician's open tickets.")),
-    "call_expert": (call_expert, _s(
-        "Bring a senior engineer into this live voice call (sends them a join link). Use when "
-        "the technician is stuck, asks for an expert, or it is beyond their skill.",
-        {"reason": STR, "ticket_id": STR}, ["reason"])),
-    "get_ticket": (get_ticket, _s(
-        "Get a ticket with asset details and maintenance history.",
-        {"ticket_id": STR}, ["ticket_id"])),
+    "get_today": (get_today, _s(
+        "Today's family calendar, open tasks, reminders, shopping list and preferences.")),
+    "get_appliance": (get_appliance, _s(
+        "Appliance details and service history (detects repeat faults).",
+        {"appliance": STR}, ["appliance"])),
     "search_manual": (search_manual, _s(
-        "Search equipment service manuals for error codes, procedures, specs, safety.",
-        {"query": STR}, ["query"])),
-    "check_inventory": (check_inventory, _s(
-        "Check spare part stock across warehouses. Accepts a SKU or part name.",
-        {"part": STR}, ["part"])),
-    "request_part_order": (request_part_order, _s(
-        "Prepare a spare part order (needs technician confirmation).",
-        {"ticket_id": STR, "sku": STR, "warehouse": STR, "qty": {"type": "integer"},
-         "additional": {"type": "boolean"}},
-        ["ticket_id", "sku", "warehouse"])),
-    "update_ticket": (update_ticket, _s(
-        "Add a work note and/or set status: in_progress, waiting_for_parts, resolved "
-        "(resolved needs confirmation).",
-        {"ticket_id": STR, "status": STR, "note": STR}, ["ticket_id"])),
+        "Search appliance manuals: error codes, safe checks, care.", {"query": STR}, ["query"])),
+    "find_service_slots": (find_service_slots, _s(
+        "Technician slots checked against the family calendar and quiet hours.",
+        {"appliance": STR})),
+    "book_service": (book_service, _s(
+        "Prepare a paid technician booking (needs the user's yes).",
+        {"provider": STR, "slot_at": WHEN, "appliance": STR}, ["provider", "slot_at"])),
     "confirm_action": (confirm_action, _s(
-        "Execute or cancel a pending action after the technician said yes or no.",
+        "Execute or cancel a pending action after the user said yes or no.",
         {"action_id": STR, "approved": {"type": "boolean"}}, ["action_id", "approved"])),
-    "notify_supervisor": (notify_supervisor, _s(
-        "Message the supervisor on Slack. urgent=true escalates the incident.",
-        {"message": STR, "ticket_id": STR, "urgent": {"type": "boolean"}}, ["message"])),
-    "schedule_followup": (schedule_followup, _s(
-        "Book or move the revisit for a ticket. `when` is local time (no timezone), "
-        "e.g. 2026-11-21T10:30. Only use a time the technician said.",
-        {"ticket_id": STR, "when": STR, "purpose": STR}, ["ticket_id", "when", "purpose"])),
-    "generate_service_report": (generate_service_report, _s(
-        "Create and share the service report for the visit.",
-        {"ticket_id": STR, "findings": STR, "actions_taken": STR, "next_steps": STR},
-        ["ticket_id", "findings", "actions_taken"])),
+    "add_event": (add_event, _s(
+        "Add an event to the family calendar (only a time the user said).",
+        {"title": STR, "start_at": WHEN, "member": STR, "minutes": {"type": "integer"}},
+        ["title", "start_at"])),
+    "add_to_shopping_list": (add_to_shopping_list, _s(
+        "Add items to the family shopping list.",
+        {"items": {"type": "array", "items": STR}, "note": STR}, ["items"])),
+    "assign_task": (assign_task, _s(
+        "Give a family member a task and notify them.",
+        {"title": STR, "assignee": STR, "due_at": WHEN}, ["title", "assignee"])),
+    "complete_task": (complete_task, _s(
+        "Mark a family task as done.", {"task": STR}, ["task"])),
+    "set_reminder": (set_reminder, _s(
+        "Schedule a reminder for a family member (only a time the user said).",
+        {"text": STR, "at": WHEN, "member": STR}, ["text", "at"])),
+    "send_family_update": (send_family_update, _s(
+        "Post a message to the family channel. urgent=true needs the user's yes.",
+        {"message": STR, "urgent": {"type": "boolean"}}, ["message"])),
+    "daily_summary": (daily_summary, _s(
+        "Wrap-up: send the family what got done, what's open, bookings and reminders.")),
+    "call_family_member": (call_family_member, _s(
+        "Bring a family member into this live voice call (sends a join link).",
+        {"member": STR, "reason": STR}, ["member"])),
 }
 
 

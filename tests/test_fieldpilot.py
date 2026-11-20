@@ -23,40 +23,6 @@ def fresh():
     db.reset_db()
 
 
-def test_rag_finds_e4_procedure():
-    hits = rag.search("chiller error E4 high pressure what to check")
-    assert hits and "E4" in hits[0]["text"]
-
-
-def test_inventory_and_confirmed_order_flow():
-    inv = tools.call("check_inventory", {"part": "fan capacitor"})["parts"][0]
-    assert "Whitefield" in inv["out_of_stock_at"]
-    assert inv["in_stock_at"][0]["warehouse"] == "HSR Layout" and "HSR Layout" in inv["recommendation"]
-    bad = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "Whitefield"})
-    assert "alternatives" in bad
-    p = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
-    assert p["status"] == "awaiting_confirmation"
-    assert db.q("SELECT * FROM orders") == []  # nothing happens before the yes
-    done = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
-    assert done["status"] == "done"
-    assert db.one("SELECT qty FROM stock WHERE sku='CAP-45' AND warehouse='HSR Layout'")["qty"] == 1
-    assert db.one("SELECT status FROM tickets WHERE id='TK-1042'")["status"] == "waiting_for_parts"
-    again = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
-    assert "error" in again
-
-
-def test_resolve_needs_confirmation_and_cancel():
-    p = tools.call("update_ticket", {"ticket_id": "TK-1043", "status": "resolved", "note": "topped up"})
-    assert p["status"] == "awaiting_confirmation"
-    tools.call("confirm_action", {"action_id": p["action_id"], "approved": False})
-    assert db.one("SELECT status FROM tickets WHERE id='TK-1043'")["status"] == "open"
-
-
-def test_bad_tool_args_do_not_crash():
-    assert "error" in tools.call("get_ticket", {"nope": 1})
-    assert "error" in tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "tomorrow", "purpose": "x"})
-
-
 # ---------------------------------------------------------------- brain with a fake LLM
 
 def _chunk(content=None, tool=None):
@@ -78,10 +44,10 @@ class FakeLLM:
 
         async def gen():
             if not tool_msgs:
-                yield _chunk(tool=("check_inventory", {"part": "CAP-45"}))
+                yield _chunk(tool=("find_service_slots", {}))
             else:
-                yield _chunk("HSR Layout has two. ")
-                yield _chunk("Shall I order one?")
+                yield _chunk("CoolCare has a free slot. ")
+                yield _chunk("Shall I book it?")
         return gen()
 
 
@@ -91,30 +57,30 @@ def test_chat_completions_streams_sse_with_tools(monkeypatch):
     c = TestClient(app)
     body = {"model": "x", "stream": True, "messages": [
         {"role": "system", "content": "agora default prompt"},
-        {"role": "user", "content": "Do we have the fan capacitor?"}]}
+        {"role": "user", "content": "Can someone fix the AC?"}]}
     assert c.post("/chat/completions", json=body).status_code == 401
     r = c.post("/chat/completions", json=body, headers={"Authorization": "Bearer secret"})
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
     lines = [l[6:] for l in r.text.splitlines() if l.startswith("data: ")]
     assert lines[-1] == "[DONE]"
     text = "".join(json.loads(l)["choices"][0]["delta"].get("content", "") for l in lines[:-1])
-    assert text == "One sec, checking stock. HSR Layout has two. Shall I order one?"
+    assert text == "Checking technicians against the family calendar. CoolCare has a free slot. Shall I book it?"
     # our system prompt + live context replaced Agora's, and the tool result went back to the LLM
     first = fake.calls[0]
-    assert first[0]["content"].startswith("You are FieldPilot")
+    assert first[0]["content"].startswith("You are HomePilot")
     assert all(m["content"] != "agora default prompt" for m in first)
-    assert any(m.get("role") == "tool" and "HSR Layout" in m["content"] for m in fake.calls[1])
+    assert any(m.get("role") == "tool" and "CoolCare" in m["content"] for m in fake.calls[1])
     kinds = [a["kind"] for a in db.q("SELECT kind FROM activity")]
-    assert "user" in kinds and "agent" in kinds and "inventory" in kinds
+    assert "user" in kinds and "agent" in kinds and "calendar" in kinds
 
 
 def test_state_and_text_chat(monkeypatch):
     monkeypatch.setattr(brain, "_targets", lambda: [(FakeLLM(), "m")])
     c = TestClient(app)
     r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
-    assert r.json()["reply"].endswith("Shall I order one?")
+    assert r.json()["reply"].endswith("Shall I book it?")
     s = c.get("/api/state").json()
-    assert {"tickets", "stock", "orders", "pending", "activity"} <= s.keys()
+    assert {"events", "tasks", "shopping", "bookings", "pending", "activity"} <= s.keys()
     assert c.get("/").status_code == 200
 
 
@@ -128,29 +94,16 @@ def test_agora_extra_fields_are_stripped():
                      {"role": "user", "content": "first job?"}]
 
 
-def test_no_means_no_even_if_model_approves():
-    p = tools.call("notify_supervisor", {"message": "Need help", "urgent": True})
-    assert p["status"] == "awaiting_confirmation"
-    db.remember("last_user_text", "No. No. No.")
-    r = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
-    assert r["status"] == "cancelled"
-    assert db.q("SELECT * FROM notifications") == []
-    p = tools.call("notify_supervisor", {"message": "Need help", "urgent": True})
-    db.remember("last_user_text", "Yes please send it")
-    assert tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})["status"] == "done"
-    assert len(db.q("SELECT * FROM notifications")) == 1
-
-
 def test_falls_back_when_model_invents_tool(monkeypatch):
     class Bad(FakeLLM):
         async def create(self, **kw):
             async def gen():
-                yield _chunk(tool=("check inventory", {"part": "x"}))
+                yield _chunk(tool=("find slots", {}))
             return gen()
     monkeypatch.setattr(brain, "_targets", lambda: [(Bad(), "weak"), (FakeLLM(), "good")])
     c = TestClient(app)
     r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
-    assert r.json()["reply"].endswith("Shall I order one?")
+    assert r.json()["reply"].endswith("Shall I book it?")
 
 
 def test_error_turns_are_dropped_from_history():
@@ -170,33 +123,18 @@ def test_tool_calls_without_index(monkeypatch):
             async def gen():
                 if not done:
                     yield NS(choices=[NS(delta=NS(content=None, tool_calls=[
-                        NS(index=None, id="a", function=NS(name="get_my_tickets", arguments="{}")),
-                        NS(index=None, id="b", function=NS(name="check_inventory",
-                                                           arguments='{"part": "CAP-45"}'))]))])
+                        NS(index=None, id="a", function=NS(name="get_today", arguments="{}")),
+                        NS(index=None, id="b", function=NS(name="find_service_slots",
+                                                           arguments='{}'))]))])
                 else:
                     yield _chunk("Two tools done.")
             return gen()
     fake = NoIndex()
     monkeypatch.setattr(brain, "_targets", lambda: [(fake, "gemini")])
     r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
+    assert r.status_code == 200, r.text
     assert r.json()["reply"].endswith("Two tools done.")
     assert len([m for m in fake.calls[1] if m.get("role") == "tool"]) == 2
-
-
-def test_spoken_time_and_speech_cleanup():
-    from datetime import datetime
-    assert tools._spoken_time(datetime(2026, 11, 20, 15, 5)) == "Friday at 3:05 PM"
-    assert tools._spoken_time(datetime(2026, 11, 20, 10, 0)) == "Friday at 10 AM"
-    assert brain.speakable("rated 45/5 uF") == "rated 45 by 5 microfarad"
-
-
-def test_repeated_requests_do_not_duplicate_actions():
-    a = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "fit"})
-    b = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30:00", "purpose": "revisit"})
-    assert a["status"] == "scheduled" and b["status"] == "already_scheduled"
-    r1 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
-    r2 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
-    assert r2["report_id"] == r1["report_id"] and len(db.q("SELECT * FROM reports")) == 1
 
 
 def test_dead_and_throttled_models_are_skipped(monkeypatch):
@@ -235,36 +173,6 @@ def test_lists_are_flattened_for_speech():
     assert out == "Check coil. Test 1 CAP-45, 4 hours. Confirm order?"
 
 
-def test_no_double_orders():
-    a = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
-    db.remember("last_user_text", "yes")
-    tools.call("confirm_action", {"action_id": a["action_id"], "approved": True})
-    again = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
-    assert again["status"] == "already_ordered" and len(db.q("SELECT * FROM orders")) == 1
-    extra = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45",
-                                              "warehouse": "HSR Layout", "additional": True})
-    assert extra["status"] == "awaiting_confirmation"
-
-
-def test_followup_is_moved_not_duplicated_and_utc_converted():
-    from datetime import datetime, timezone
-    tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "a"})
-    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T12:00", "purpose": "b"})
-    assert r["status"] == "rescheduled" and len(db.q("SELECT * FROM followups")) == 1
-    utc = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T05:00Z", "purpose": "c"})
-    expected = datetime(2030, 1, 1, 5, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
-    assert utc["when"] == expected.isoformat(sep=" ")
-
-
-def test_followup_needs_a_time_from_the_technician():
-    db.remember("last_user_text", "Wrap it up please")
-    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T05:30", "purpose": "x"})
-    assert "error" in r
-    db.remember("last_user_text", "I'll come back tomorrow at ten thirty")
-    r = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "x"})
-    assert r["status"] == "scheduled"
-
-
 def test_units_split_across_stream_chunks(monkeypatch):
     class Split(FakeLLM):
         async def create(self, **kw):
@@ -285,23 +193,113 @@ def test_run_demo_finds_tunnel_url():
     assert run_demo.find_tunnel_url(iter(["no url here"])) is None
 
 
-def test_shift_briefing_and_repeat_fault_insight():
+
+
+# ---------------------------------------------------------------- HomePilot family workflow
+
+def _ok_slot():
+    return next(o for o in tools.find_service_slots()["options"] if o["ok"])
+
+
+def test_rag_finds_e4_safe_checks():
+    hits = rag.search("AC error E4 warm air what can I check")
+    assert hits and "E4" in " ".join(h["text"] for h in hits)
+
+
+def test_before_today_has_calendar_tasks_and_preferences():
+    t = tools.call("get_today", {})
+    titles = [e["title"] for e in t["events_next_30h"]]
+    assert any("doctor" in x for x in titles) and t["open_tasks"] and "diet" in t["preferences"]
     b = tools.shift_briefing()
-    assert "2 open jobs" in b and "Chiller 3" in b and "E4" in b
-    r = tools.call("get_ticket", {"ticket_id": "TK-1042"})
+    assert "Anika" in b and "open family tasks" in b
+
+
+def test_repeat_fault_from_spoken_code():
+    db.remember("last_user_text", "the living room AC shows e four and blows warm air")
+    r = tools.call("get_appliance", {"appliance": "living room AC"})
     assert r["insight"]["code"] == "E4" and r["insight"]["previous"] == 2
     assert "capacitor" in r["insight"]["likely_root_cause"]
-    assert "insight" not in tools.call("get_ticket", {"ticket_id": "TK-1043"})
-    rep = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
-    assert "Repeat fault" in db.one("SELECT body FROM reports WHERE id=?", (rep["report_id"],))["body"]
+    assert tools._codes_in("E-4 again") == ["E4"]
 
 
-def test_call_expert_and_state():
-    r = tools.call("call_expert", {"reason": "need a second opinion"})
-    assert r["status"] == "invited" and r["join_link"].endswith("/expert.html")
-    tools.call("get_ticket", {"ticket_id": "TK-1042"})
-    c = TestClient(app)
-    s = c.get("/api/state").json()
-    assert s["expert_called"] is True and s["insight"]["code"] == "E4" and s["now"]
-    assert c.get("/expert.html").status_code == 200
-    assert "Murf" not in tools.shift_briefing()  # plain spoken text
+def test_slots_skip_calendar_clash_and_quiet_hours():
+    f = tools.call("find_service_slots", {"appliance": "AC"})
+    bad = [o for o in f["options"] if not o["ok"]]
+    assert any("doctor" in " ".join(o["problems"]) for o in bad)
+    assert all(o["ok"] is False for o in f["options"] if int(o["slot_at"][11:13]) >= 20)
+    assert "Best:" in f["recommendation"] and "clashes with Dadi" in f["recommendation"]
+    clash = next(o for o in bad if "doctor" in " ".join(o["problems"]))
+    assert "error" in tools.call("book_service", {"provider": clash["provider"], "slot_at": clash["slot_at"]})
+
+
+def test_booking_needs_yes_and_lands_on_calendar_once():
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"].replace(" ", "T")})
+    assert p["status"] == "awaiting_confirmation" and db.q("SELECT * FROM bookings") == []
+    db.remember("last_user_text", "yes book it")
+    done = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert done["status"] == "done"
+    assert db.one("SELECT * FROM events WHERE source LIKE 'booking%'")
+    assert db.one("SELECT * FROM reminders WHERE text LIKE '%technician arrives%'")
+    again = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    assert again["status"] == "already_booked" and len(db.q("SELECT * FROM bookings")) == 1
+
+
+def test_no_means_no_even_if_model_approves():
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    db.remember("last_user_text", "No. No, don't book it.")
+    r = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert r["status"] == "cancelled" and db.q("SELECT * FROM bookings") == []
+
+
+def test_shopping_tasks_completion_and_reminders():
+    r = tools.call("add_to_shopping_list", {"items": ["milk", "Paneer", "bananas"]})
+    assert r["added"] == ["milk", "Paneer"]  # bananas already on the list
+    a = tools.call("assign_task", {"title": "Pick up groceries", "assignee": "Rohan"})
+    assert a["status"] == "assigned" and db.q("SELECT * FROM notifications")
+    assert tools.call("assign_task", {"title": "Pick up groceries", "assignee": "dad"})["status"] == "already_assigned"
+    d = tools.call("complete_task", {"task": "recycling"})
+    assert d["status"] == "done" and "recycling" in d["task"].lower()
+    db.remember("last_user_text", "remind Dadi at 8 pm to take her BP tablet")
+    rem = tools.call("set_reminder", {"text": "BP tablet", "at": "2030-01-01T20:00", "member": "grandma"})
+    assert rem["status"] == "scheduled" and rem["for"] == "Dadi"
+    db.remember("last_user_text", "remind me about that")
+    assert "error" in tools.call("set_reminder", {"text": "x", "at": "2030-01-01T09:00"})
+
+
+def test_calendar_event_clash_and_utc():
+    db.remember("last_user_text", "add a call tomorrow at 9")
+    doc = db.one("SELECT start_at FROM events WHERE title LIKE '%doctor%'")["start_at"]
+    r = tools.call("add_event", {"title": "Parent meeting", "start_at": doc.replace(" ", "T")})
+    assert r["status"] == "clash"
+    ok = tools.call("add_event", {"title": "Plumber", "start_at": "2030-01-01T05:00Z"})
+    assert ok["status"] == "added"
+
+
+def test_summary_family_call_and_state():
+    tools.call("complete_task", {"task": "recycling"})
+    s1 = tools.call("daily_summary", {})
+    tools.call("daily_summary", {})
+    assert "Done: Take out the recycling" in s1["summary"]
+    assert len([n for n in db.q("SELECT message FROM notifications") if "Family update" in n["message"]]) == 1
+    c = tools.call("call_family_member", {"member": "Rohan", "reason": "AC repair"})
+    assert c["status"] == "invited" and c["join_link"].endswith("/expert.html")
+    db.remember("last_user_text", "living room AC shows E4")
+    tools.call("get_appliance", {"appliance": "AC"})
+    st = TestClient(app).get("/api/state").json()
+    assert st["expert_called"] and st["insight"]["code"] == "E4" and st["appliance"]["id"] == "AC-LIVING"
+    assert TestClient(app).get("/expert.html").status_code == 200
+
+
+def test_bad_tool_args_do_not_crash():
+    assert "error" in tools.call("get_appliance", {"nope": 1})
+    assert "error" in tools.call("assign_task", {"title": "x", "assignee": "the neighbour"})
+    assert "error" in tools.call("book_service", {"provider": "X", "slot_at": "tomorrow"})
+
+
+def test_spoken_time_and_speech_cleanup():
+    from datetime import datetime, timedelta
+    d = datetime.now().replace(hour=15, minute=5) + timedelta(days=3)
+    assert tools._spoken_time(d).endswith("at 3:05 PM")
+    assert brain.speakable("rated 45/5 uF") == "rated 45 by 5 microfarad"

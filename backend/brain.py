@@ -1,4 +1,4 @@
-"""The agent's brain.
+"""HomePilot's brain.
 
 Agora Conversational AI sends every user turn here in OpenAI Chat Completions format
 (our /chat/completions endpoint). We:
@@ -22,33 +22,35 @@ from . import config, db, tools
 MAX_TOOL_ROUNDS = 10
 MAX_HISTORY = 10
 
-SYSTEM_PROMPT = """You are FieldPilot, a hands-free voice copilot for a field technician on site.
-Everything you write is spoken aloud.
+SYSTEM_PROMPT = """You are HomePilot, a warm, efficient voice assistant for the Sharma family's
+home. You talk with Anika (a parent). Everything you write is spoken aloud.
 
 VOICE
-- Max 3 short sentences. No lists, numbering, symbols or markdown. Give only the facts that
-  matter now. Troubleshooting: one step at a time, safety first, then wait for the result.
+- Max 3 short sentences. No lists, numbering, symbols or markdown. Friendly, never chatty.
+  Mention only what matters now. For appliance problems: one safe step at a time.
 
 FACTS
-- Use tools for every fact; never invent tickets, history, stock, prices or procedures.
-- Unknown job: get_my_tickets. Ticket discussed: get_ticket (point out repeat faults in its
-  history). Error codes, specs, procedures: search_manual.
-- Part needed: check_inventory, follow its "recommendation", then request_part_order.
+- Use tools for every fact; never invent events, tasks, prices, slots or history.
+- "What's on today" or planning: get_today. Appliance problem: get_appliance, then
+  search_manual for the error code. get_appliance may return an "insight" (repeat fault):
+  say it first in one sentence, then give the first safe check.
+- Need a technician: find_service_slots, then IMMEDIATELY book_service for its best slot in
+  the same turn (it only prepares it). Then say in one breath which slot clashed with the
+  family calendar and was skipped, the chosen slot and fee, and ask ONE yes/no question.
+- Respect the family's preferences (vegetarian, budget, quiet hours, Dadi's medicine).
 
 ACTIONS
-- Orders, resolving tickets and urgent escalations return awaiting_confirmation: nothing has
-  happened yet. Ask a clear yes/no question. On yes call confirm_action(approved=true) with the
-  pending id from LIVE CONTEXT; on no / don't / wait / cancel use approved=false.
+- book_service and urgent alerts return awaiting_confirmation: nothing has happened yet. Ask a
+  clear yes/no question. On yes call confirm_action(approved=true) with the pending id from
+  LIVE CONTEXT; on no / don't / wait / cancel use approved=false.
 - Never say something was done unless a tool returned success. One tool call per requested
-  action. Don't write an answer in the same message as tool calls.
-- An order that is done is done: thanks / okay are not new orders. confirm_action already
-  updates the ticket, so don't add a note for the same order.
-- Wrap-up: schedule_followup (ask the time if not given), generate_service_report,
-  notify_supervisor. Then a one-sentence recap.
-- get_ticket may return an "insight" (repeat fault): say it first, in one sentence ("This is the
-  third E4 on this unit..."), then still guide the first safe check before suggesting an order. Technician stuck or asks for an expert: call_expert.
-- Tool error: say it briefly and offer the next best option. Safety risk or beyond skill:
-  offer notify_supervisor with urgent=true."""
+  action. Don't write an answer in the same message as tool calls. A done booking is done:
+  thanks / okay are not new bookings.
+- Shopping: add_to_shopping_list. Chores: assign_task (it notifies the person). "X did it":
+  complete_task. Medicine or other nudges: set_reminder (only a time the user said; ask if
+  not). Calendar: add_event. "Get Rohan on the call": call_family_member.
+- Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
+- Tool error: say it briefly and offer the next best option."""
 
 
 def _client(base_url: str, api_key: str) -> AsyncOpenAI:
@@ -193,25 +195,22 @@ def speakable(text: str) -> str:
 
 
 def live_context() -> str:
-    """Memory injected into every turn: who, what, where, what is pending."""
-    tech = db.one("SELECT * FROM technicians WHERE id=?", (config.DEFAULT_TECHNICIAN_ID,)) or {}
-    active = db.recall("active_ticket")
+    """Memory injected into every turn: time, family, active issue, what is pending."""
     lines = [f"Current local time: {db.now().strftime('%A %d %B %Y, %H:%M')} (Asia/Kolkata).",
-             f"Technician: {tech.get('name')} ({tech.get('id')}), region {tech.get('region')}, "
-             f"nearest warehouse {tech.get('base_warehouse')}, supervisor "
-             f"{tech.get('supervisor_name')}. Preferences: {tech.get('preferences')}."]
+             "Family: " + "; ".join(f"{m['name']} ({m['role']}, {m['notes']})"
+                                   for m in db.q("SELECT * FROM members")) + ".",
+             "Preferences: " + "; ".join(f"{h['key']}: {h['value']}"
+                                        for h in db.q("SELECT * FROM household")) + "."]
+    active = db.recall("active_appliance")
     if active:
-        t = db.one("SELECT id, title, status, notes FROM tickets WHERE id=?", (active,))
-        if t:
-            lines.append(f"Active ticket: {t['id']} '{t['title']}', status {t['status']}."
-                         + (f" Notes so far: {t['notes'].strip()}" if t["notes"] else ""))
-    pending = db.q("SELECT id, summary FROM pending_actions WHERE status='awaiting_confirmation' "
-                   "ORDER BY created_at DESC LIMIT 3")
-    for p in pending:
+        a = db.one("SELECT name, model FROM appliances WHERE id=?", (active,))
+        if a:
+            lines.append(f"Active home issue: {a['name']} ({a['model']}).")
+    for p in db.q("SELECT id, summary FROM pending_actions WHERE status='awaiting_confirmation' "
+                  "ORDER BY created_at DESC LIMIT 3"):
         lines.append(f"Pending confirmation {p['id']}: {p['summary']}")
-    orders = db.q("SELECT id, sku, warehouse, eta FROM orders ORDER BY created_at DESC LIMIT 3")
-    for o in orders:
-        lines.append(f"Placed order {o['id']}: {o['sku']} from {o['warehouse']}, ETA {o['eta']}.")
+    for b in db.q("SELECT id, provider, slot_at FROM bookings WHERE status='booked'"):
+        lines.append(f"Booked {b['id']}: {b['provider']} at {b['slot_at']}.")
     return "\n".join(lines)
 
 
@@ -243,17 +242,20 @@ def build_messages(incoming: list[dict]) -> list[dict]:
 
 
 FILLERS = {
-    "check_inventory": "One sec, checking stock.",
-    "call_expert": "Calling a senior engineer into this call.",
+    "get_today": "Let me look at today.",
+    "get_appliance": "Checking the AC's history.",
     "search_manual": "Let me check the manual.",
-    "get_ticket": "Pulling up the ticket.",
-    "get_my_tickets": "Checking your tickets.",
-    "request_part_order": "Preparing the order.",
-    "confirm_action": "Done, give me a second.",
-    "generate_service_report": "Writing the report now.",
-    "notify_supervisor": "Messaging your supervisor.",
-    "schedule_followup": "Booking that.",
-    "update_ticket": "Updating the ticket.",
+    "find_service_slots": "Checking technicians against the family calendar.",
+    "book_service": "Preparing the booking.",
+    "confirm_action": "Done, one second.",
+    "add_event": "Adding it to the calendar.",
+    "add_to_shopping_list": "Adding that.",
+    "assign_task": "Sending that over.",
+    "complete_task": "Ticking that off.",
+    "set_reminder": "Setting the reminder.",
+    "send_family_update": "Messaging the family.",
+    "daily_summary": "Sending the family a summary.",
+    "call_family_member": "Calling them into this call.",
 }
 
 
