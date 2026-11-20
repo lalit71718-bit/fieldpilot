@@ -25,12 +25,15 @@ def _check_key(authorization: str | None) -> None:
     if not config.BRAIN_API_KEY:
         return
     if (authorization or "").removeprefix("Bearer ").strip() != config.BRAIN_API_KEY:
+        db.log("error", "Agora call rejected: BRAIN_API_KEY mismatch",
+               "header missing" if not authorization else "key differs from .env")
         raise HTTPException(401, "Invalid API key")
 
 
 @app.post("/chat/completions")
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str | None = Header(None)):
+    db.log("system", "Agora called the brain", request.headers.get("user-agent", "")[:60])
     _check_key(authorization)
     body = await request.json()
     messages = body.get("messages", [])
