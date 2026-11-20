@@ -144,3 +144,9 @@ tr.new-row td{color:var(--accent)}
 .alarm{background:rgba(25,24,19,.45)}
 .alarm-box{background:var(--panel);border-color:var(--accent);color:var(--text)}
 .alarm-text{font:400 28px/1.2 "Instrument Serif",Georgia,serif}
+
+.alarm-count{font:12px "JetBrains Mono",monospace;color:var(--accent)}
+.alarm-btns{display:flex;gap:10px;justify-content:center}
+.alarm-btns button{padding:11px 20px;font-size:15px}
+.alarm-icon{animation:shake 1s ease-in-out infinite}
+@keyframes shake{0%,100%{transform:rotate(0)}20%{transform:rotate(-12deg)}40%{transform:rotate(10deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(4deg)}}

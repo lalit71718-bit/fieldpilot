@@ -33,12 +33,53 @@ function chime() {
     });
   } catch (e) { /* audio blocked until the user has clicked something */ }
 }
-function showAlarm(a) {
+// Alarms keep ringing (chime + voice every 10 s) until "Got it" or "Snooze".
+const alarmQueue = [];
+let alarmTimer = null, alarmRings = 0, currentAlarm = null;
+const MAX_RINGS = 30;  // safety stop after ~5 minutes
+
+function sayAlarm(a) {
+  const text = `${a.title}. ${a.detail}`;
+  if (live) {
+    // In a live call, HomePilot says it again in its own voice (Agora speak API).
+    fetch("/api/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => {});
+  } else if ("speechSynthesis" in window) {
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+}
+function ring() {
+  if (!currentAlarm) return;
+  alarmRings += 1;
+  chime();
+  // The first announcement in a call already came from the server; repeat from the 2nd ring.
+  if (alarmRings > 1 || !live) sayAlarm(currentAlarm);
+  $("alarm-count").textContent = alarmRings > 1 ? `Ringing · ${alarmRings} times` : "Ringing";
+  if (alarmRings >= MAX_RINGS) stopAlarm("missed");
+}
+function startAlarm(a) {
+  currentAlarm = a; alarmRings = 0;
   $("alarm-text").textContent = `${a.title}: ${a.detail}`;
   $("alarm").classList.remove("hidden");
-  chime();
-  // Without a live call, the browser speaks it too.
-  if (!live && "speechSynthesis" in window) speechSynthesis.speak(new SpeechSynthesisUtterance(`${a.title}. ${a.detail}`));
+  ring();
+  alarmTimer = setInterval(ring, 10000);
+  $("alarm-ok").focus();
+}
+function showAlarm(a) {
+  if (currentAlarm) { alarmQueue.push(a); return; }
+  startAlarm(a);
+}
+function stopAlarm(how) {
+  clearInterval(alarmTimer); alarmTimer = null;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  if (currentAlarm) {
+    fetch("/api/alarm/ack", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: currentAlarm.title, detail: currentAlarm.detail, how }) }).catch(() => {});
+  }
+  currentAlarm = null;
+  $("alarm").classList.add("hidden");
+  const next = alarmQueue.shift();
+  if (next) setTimeout(() => startAlarm(next), 400);
 }
 
 async function api(path, opts = {}) {
@@ -131,7 +172,8 @@ $("text-form").onsubmit = async (ev) => {
   refresh();
 };
 
-$("alarm-ok").onclick = () => $("alarm").classList.add("hidden");
+$("alarm-ok").onclick = () => stopAlarm("done");
+$("alarm-snooze").onclick = () => stopAlarm("snooze");
 
 $("reset").onclick = async () => {
   if (!confirm("Reset all demo data (calendar, tasks, shopping, bookings)?")) return;

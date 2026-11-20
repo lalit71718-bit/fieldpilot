@@ -176,6 +176,32 @@ async def diag():
     return out
 
 
+@app.post("/api/speak")
+async def speak(request: Request):
+    """Have the live agent say a short text (used to repeat a ringing alarm)."""
+    body = await request.json()
+    text = str(body.get("text", ""))[:300]
+    return {"ok": await agora.speak(text) if text else False}
+
+
+@app.post("/api/alarm/ack")
+async def alarm_ack(request: Request):
+    """'Got it' stops the alarm; 'Snooze' rings it again in 5 minutes."""
+    from datetime import timedelta
+    body = await request.json()
+    title, detail, how = (str(body.get(k, "")) for k in ("title", "detail", "how"))
+    who = title.removeprefix("Reminder for ").strip() or "Anika"
+    if how == "snooze":
+        m = db.one("SELECT id FROM members WHERE name=?", (who,))
+        db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+               (detail, m["id"] if m else "anika", db.iso(db.now() + timedelta(minutes=5)),
+                "scheduled", db.iso(db.now())))
+        db.log("reminder", f"Snoozed 5 min: {who}", detail)
+    else:
+        db.log("reminder", f"{'Acknowledged' if how == 'done' else 'Missed'}: {who}", detail)
+    return {"ok": True}
+
+
 @app.get("/healthz")
 def health():
     return {"ok": True}

@@ -381,3 +381,13 @@ def test_near_miss_tool_name_is_corrected(monkeypatch):
     r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "get Rohan"}]})
     assert r.json()["reply"].endswith("Rohan is invited.")
     assert db.q("SELECT * FROM activity WHERE kind='call'")
+
+
+def test_alarm_ack_and_snooze():
+    c = TestClient(app)
+    assert c.post("/api/alarm/ack", json={"title": "Reminder for Dadi", "detail": "Take BP tablet", "how": "snooze"}).json()["ok"]
+    r = db.one("SELECT * FROM reminders WHERE status='scheduled' AND member='dadi'")
+    assert r and r["text"] == "Take BP tablet"
+    c.post("/api/alarm/ack", json={"title": "Reminder for Dadi", "detail": "Take BP tablet", "how": "done"})
+    assert db.one("SELECT * FROM activity WHERE title='Acknowledged: Dadi'")
+    assert c.post("/api/speak", json={"text": ""}).json()["ok"] is False
