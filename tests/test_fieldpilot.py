@@ -187,3 +187,29 @@ def test_spoken_time_and_speech_cleanup():
     assert tools._spoken_time(datetime(2026, 11, 20, 15, 5)) == "Friday at 3:05 PM"
     assert tools._spoken_time(datetime(2026, 11, 20, 10, 0)) == "Friday at 10 AM"
     assert brain.speakable("rated 45/5 uF") == "rated 45 by 5 microfarad"
+
+
+def test_repeated_requests_do_not_duplicate_actions():
+    a = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "fit"})
+    b = tools.call("schedule_followup", {"ticket_id": "TK-1042", "when": "2030-01-01T10:30", "purpose": "revisit"})
+    assert a["status"] == "scheduled" and b["status"] == "already_scheduled"
+    r1 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
+    r2 = tools.call("generate_service_report", {"ticket_id": "TK-1042", "findings": "f", "actions_taken": "a"})
+    assert r2["report_id"] == r1["report_id"] and len(db.q("SELECT * FROM reports")) == 1
+
+
+def test_dead_and_throttled_models_are_skipped(monkeypatch):
+    import httpx
+    from openai import NotFoundError
+    seen = []
+    class Gone(FakeLLM):
+        async def create(self, **kw):
+            seen.append("gone")
+            raise NotFoundError("gone", response=httpx.Response(404, request=httpx.Request("POST", "http://x")), body=None)
+    brain._cooldown.clear()
+    monkeypatch.setattr(brain, "_targets", lambda: [(Gone(), "dead-model"), (FakeLLM(), "good")])
+    c = TestClient(app)
+    for _ in range(2):
+        c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
+    assert seen == ["gone"]  # second turn skipped the dead model
+    brain._cooldown.clear()

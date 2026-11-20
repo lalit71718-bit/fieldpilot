@@ -139,6 +139,10 @@ async def diag():
             out["tunnel"] = {"ok": r.status_code == 200, "status": r.status_code}
         except Exception as e:
             out["tunnel"] = {"ok": False, "error": str(e)[:200]}
+    out["llm_cooldowns_secs"] = {m: round(t - time.time()) for m, t in brain._cooldown.items()
+                                 if t > time.time()}
+    out["recent_llm_failures"] = db.q("SELECT ts, title, detail FROM activity WHERE kind='llm' "
+                                      "ORDER BY id DESC LIMIT 5")
     out["recent_errors"] = db.q("SELECT ts, title, detail FROM activity WHERE kind='error' "
                                 "ORDER BY id DESC LIMIT 5")
     return out

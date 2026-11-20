@@ -154,7 +154,7 @@ function render(s) {
   $("report").textContent = r ? r.body : "Not generated yet.";
   $("report").classList.toggle("muted", !r);
 
-  $("activity").innerHTML = s.activity.filter((a) => !["user", "agent", "tool"].includes(a.kind)).map((a) =>
+  $("activity").innerHTML = s.activity.filter((a) => !["user", "agent", "tool", "llm"].includes(a.kind)).map((a) =>
     `<div class="ev"><span class="t">${hhmm(a.ts)}</span><span class="tag ${a.kind}">${esc(a.kind)}</span><span title="${esc(a.detail)}"><b>${esc(a.title)}</b> <span class="d">${esc(a.detail)}</span></span></div>`).join("")
     || '<div class="muted">Actions the agent takes will stream here.</div>';
 

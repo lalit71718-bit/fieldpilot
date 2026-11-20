@@ -255,6 +255,8 @@ def schedule_followup(ticket_id: str, when: str, purpose: str) -> dict:
         return {"error": "Give `when` as an ISO date-time, e.g. 2026-11-21T10:30."}
     if dt < db.now() - timedelta(minutes=5):
         return {"error": "That time is in the past."}
+    if db.one("SELECT id FROM followups WHERE ticket_id=? AND when_at=?", (t["id"], db.iso(dt))):
+        return {"status": "already_scheduled", "ticket_id": t["id"], "when": db.iso(dt)}
     db.run("INSERT INTO followups (ticket_id,when_at,purpose,created_at) VALUES (?,?,?,?)",
            (t["id"], db.iso(dt), purpose, db.iso(db.now())))
     db.log("schedule", f"Follow-up booked {dt.strftime('%a %d %b %I:%M %p')}", purpose)
@@ -267,6 +269,11 @@ def generate_service_report(ticket_id: str, findings: str, actions_taken: str,
     t = _ticket_or_error(ticket_id)
     if not t:
         return {"error": f"Ticket {ticket_id} not found."}
+    recent = db.one("SELECT id FROM reports WHERE ticket_id=? AND created_at>=? ORDER BY "
+                    "created_at DESC", (t["id"], db.iso(db.now() - timedelta(minutes=3))))
+    if recent:  # repeated request (e.g. the same sentence sent twice): don't spam Slack
+        return {"status": "already_created", "report_id": recent["id"],
+                "shared_with": _tech().get("supervisor_name")}
     asset = db.one("SELECT * FROM assets WHERE id=?", (t["asset_id"],))
     orders = db.q("SELECT id, sku, qty, warehouse, eta FROM orders WHERE ticket_id=?", (t["id"],))
     fups = db.q("SELECT when_at, purpose FROM followups WHERE ticket_id=?", (t["id"],))

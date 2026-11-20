@@ -43,8 +43,9 @@ HOW YOU WORK
 - If a part is needed: check_inventory, choose the fastest available warehouse, then
   request_part_order. If the nearest warehouse is out of stock, say so and offer the best
   alternative.
-- Critical actions (orders, resolving tickets) return status awaiting_confirmation. Read the
-  summary and ask a clear yes/no question. Only after the technician clearly agrees call
+- Critical actions (orders, resolving tickets) return status awaiting_confirmation. Nothing
+  has happened yet: say "I can order..." / "Shall I...", never "order placed", and ask a clear
+  yes/no question. Only after the technician clearly agrees call
   confirm_action with approved=true. If they say no or change their mind, approved=false.
   If LIVE CONTEXT shows a pending confirmation and the technician says yes / go ahead / order
   it, call confirm_action with that id directly. Do not prepare the same action again.
@@ -95,6 +96,22 @@ def _err(e: Exception) -> str:
     return f"{e} {detail}".strip()[:400]
 
 
+_cooldown: dict[str, float] = {}  # model -> time until which we skip it
+
+
+def _cool(model: str, e: Exception) -> None:
+    """Skip models that are gone (404) or throttled (429) instead of re-trying every turn."""
+    text = _err(e)
+    if getattr(e, "status_code", None) == 404:
+        _cooldown[model] = time.time() + 3600
+    elif isinstance(e, RateLimitError):
+        m = re.search(r"try again in ([\d.]+)(ms|s)", text)
+        wait = (float(m.group(1)) / (1000 if m.group(2) == "ms" else 1)) if m else 20
+        if "free_tier_requests" in text or "per day" in text.lower():
+            wait = 3600  # daily quota gone
+        _cooldown[model] = time.time() + min(wait + 1, 3600)
+
+
 class _Round:
     def __init__(self):
         self.content = ""
@@ -105,8 +122,9 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
     """One LLM call. Falls through to the next model on rate limits, provider errors and
     invalid tool calls, as long as nothing has been spoken yet in this round."""
     last: Exception | None = None
-    targets = _targets()
+    all_targets = _targets()
     for attempt in range(2):
+        targets = [t for t in all_targets if _cooldown.get(t[1], 0) < time.time()] or all_targets
         for client, model in targets:
             try:
                 stream = await client.chat.completions.create(
@@ -141,7 +159,8 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
                 last = e
                 rnd.calls.clear()
                 reason = "rate-limited" if isinstance(e, RateLimitError) else "failed"
-                db.log("system", f"{model} {reason}, trying next model", _err(e))
+                _cool(model, e)
+                db.log("llm", f"{model} {reason}, trying next model", _err(e))
         if attempt == 0:
             await asyncio.sleep(3)  # everything throttled: wait once for the per-minute window
     raise last or RuntimeError("No LLM model available")
