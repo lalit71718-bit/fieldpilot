@@ -35,11 +35,36 @@ def find_tunnel_url(lines, timeout: float = 60.0) -> str | None:
     return None
 
 
-def start_tunnel() -> tuple[subprocess.Popen, str]:
+def find_cloudflared() -> str | None:
+    """PATH first, then the usual Windows install folders (a winget install is often not on
+    PATH in terminals that were open before the install)."""
     exe = shutil.which("cloudflared")
+    if exe:
+        return exe
+    if os.name != "nt":
+        return None
+    import glob
+    local = os.environ.get("LOCALAPPDATA", "")
+    candidates = [
+        os.path.join(local, "Microsoft", "WinGet", "Links", "cloudflared.exe"),
+        *glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages",
+                                "Cloudflare.cloudflared*", "**", "cloudflared*.exe"),
+                   recursive=True),
+        r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+        r"C:\Program Files\cloudflared\cloudflared.exe",
+        os.path.join(os.path.expanduser("~"), "Downloads", "cloudflared.exe"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "cloudflared-windows-amd64.exe"),
+    ]
+    return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+
+def start_tunnel() -> tuple[subprocess.Popen, str]:
+    exe = find_cloudflared()
     if not exe:
         sys.exit("cloudflared not found. Install it (Windows: winget install --id "
-                 "Cloudflare.cloudflared), open a NEW terminal, and run this again.")
+                 "Cloudflare.cloudflared), open a NEW terminal, and run this again.\n"
+                 "Or start the tunnel yourself in another window and run: "
+                 "python run_demo.py --no-tunnel")
     proc = subprocess.Popen([exe, "tunnel", "--url", f"http://localhost:{PORT}"],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             bufsize=1)
