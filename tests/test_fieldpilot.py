@@ -30,7 +30,8 @@ def test_rag_finds_e4_procedure():
 
 def test_inventory_and_confirmed_order_flow():
     inv = tools.call("check_inventory", {"part": "fan capacitor"})["parts"][0]
-    assert inv["nearest_has_stock"] is False and inv["best_option"]["warehouse"] == "HSR Layout"
+    assert "Whitefield" in inv["out_of_stock_at"]
+    assert inv["in_stock_at"][0]["warehouse"] == "HSR Layout" and "HSR Layout" in inv["recommendation"]
     bad = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "Whitefield"})
     assert "alternatives" in bad
     p = tools.call("request_part_order", {"ticket_id": "TK-1042", "sku": "CAP-45", "warehouse": "HSR Layout"})
@@ -227,3 +228,8 @@ def test_gemini_gets_thought_signatures_and_groq_does_not():
     groq = brain._for_provider(hist, SimpleNamespace(base_url="https://api.groq.com/openai/v1"))
     assert all("extra_content" not in tc for tc in groq[0]["tool_calls"])
     assert brain.speakable("status waiting_for_parts") == "status waiting for parts"
+
+
+def test_lists_are_flattened_for_speech():
+    out = brain.speakable("1. Check coil. 2. Test 1x CAP-45, 4 hrs. Confirm order? (Yes/No)")
+    assert out == "Check coil. Test 1 CAP-45, 4 hours. Confirm order?"

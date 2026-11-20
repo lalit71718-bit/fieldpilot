@@ -83,12 +83,21 @@ def check_inventory(part: str) -> dict:
         stock = db.q("SELECT warehouse, qty, eta_hours FROM stock WHERE sku=? "
                      "ORDER BY eta_hours", (p["sku"],))
         available = [s for s in stock if s["qty"] > 0]
+        best = available[0] if available else None
+        if not best:
+            advice = "Out of stock everywhere. Offer to escalate to the supervisor."
+        elif best["warehouse"] == base:
+            advice = f"Order from {base}, delivery in about {best['eta_hours']} hours."
+        else:
+            advice = (f"{base} (nearest) has none. Best option: {best['warehouse']} with "
+                      f"{best['qty']} in stock, delivery in about {best['eta_hours']} hours.")
         out.append({
             "sku": p["sku"], "name": p["name"], "unit_price_inr": p["unit_price"],
-            "fits": p["compatible_models"], "stock": stock,
-            "nearest_warehouse": base,
-            "nearest_has_stock": any(s["warehouse"] == base and s["qty"] > 0 for s in stock),
-            "best_option": available[0] if available else None,
+            "fits": p["compatible_models"],
+            # Only warehouses that actually have it, so the model can't pick an empty one.
+            "in_stock_at": available,
+            "out_of_stock_at": [s["warehouse"] for s in stock if s["qty"] <= 0],
+            "recommendation": advice,
         })
     db.log("inventory", f"Checked stock: {parts[0]['sku']}", part)
     return {"parts": out}
