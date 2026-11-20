@@ -191,3 +191,22 @@ tr.new-row td{color:var(--accent)}
 .shop-foot a{font:12px "JetBrains Mono",monospace;color:var(--accent)}
 .tick,.tick:hover{background:transparent}
 .tick.on,.tick.on:hover{background:var(--ok)}
+
+/* payment page + store order card */
+.demo-note{background:var(--panel2);border:1px dashed var(--line);border-radius:10px;padding:10px 12px;color:var(--muted);line-height:1.5}
+.pay-card{text-align:center}
+.pay-amount{font:400 64px/1 "Instrument Serif",Georgia,serif;margin:6px 0 10px}
+.pay-card .shop-list li{justify-content:center;border:0;padding:4px 0}
+.pay-actions{display:flex;flex-direction:column;gap:10px}
+.pay-actions .big{padding:16px;font-size:17px}
+.pay-status{font:400 26px "Instrument Serif",Georgia,serif;color:var(--ok)}
+.store-card{display:grid;grid-template-columns:150px 1fr;gap:18px;align-items:center}
+.store-qr{width:150px;height:150px;background:#fff;border-radius:10px;padding:6px}
+.store-qr svg{width:100%;height:100%;display:block}
+.steps-row{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.steps-row span{font:11px "JetBrains Mono",monospace;padding:4px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.steps-row span.done{background:var(--ok);border-color:var(--ok);color:#fff}
+.steps-row span.now{border-color:var(--accent);color:var(--accent)}
+.store-title{font:400 24px/1.15 "Instrument Serif",Georgia,serif}
+@media (max-width:700px){.store-card{grid-template-columns:1fr}}
+#store-sub a{color:var(--accent)}

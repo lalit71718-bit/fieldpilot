@@ -42,7 +42,7 @@ FACTS
 - Respect the family's preferences (vegetarian, budget, quiet hours, Dadi's medicine).
 
 ACTIONS
-- book_service, order_groceries and urgent alerts return awaiting_confirmation: nothing has happened yet. Ask a
+- book_service, order_groceries, store_checkout and urgent alerts return awaiting_confirmation: nothing has happened yet. Ask a
   clear yes/no question. On yes call confirm_action(approved=true) with the pending id from
   LIVE CONTEXT; on no / don't / wait / cancel use approved=false.
 - Never say something was done unless a tool returned success. One tool call per requested
@@ -55,6 +55,11 @@ ACTIONS
   complete_task. Medicine or other nudges: set_reminder (only a time the user said; ask if
   not). Calendar: add_event. "Get Rohan / my friend Priya on the call": call_family_member (it sends a join link; you
   never phone anyone).
+- Ordering food or anything from the store (biryani, ghee, chips, perfume…): store_search,
+  then store_add_to_cart with the item ids, then store_checkout, which reads back the cart
+  and needs a yes. After the yes the order is placed and the PAYMENT IS APPROVED ON THE
+  USER'S PHONE (UPI-style request; QR on the dashboard). Never ask for a PIN, card or bank
+  details, and never say it is paid until store_order_status says so.
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
 - Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
   are spoken in this call and posted to the family channel (not phone alarms). If the user
@@ -313,6 +318,11 @@ FILLERS = {
     "remove_from_shopping_list": "Taking that off the list.",
     "shopping_status": "Checking the list.",
     "order_groceries": "Putting the order together.",
+    "store_search": "Looking that up in the store.",
+    "store_add_to_cart": "Adding it to the cart.",
+    "store_view_cart": "Checking the cart.",
+    "store_checkout": "Getting the order ready.",
+    "store_order_status": "Checking the order.",
     "assign_task": "Sending that over.",
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",
@@ -366,7 +376,7 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
              **({"extra_content": c["extra"]} if c.get("extra") else {})}
             for i, c in sorted(calls.items())]})
         for i, c in sorted(calls.items()):
-            result = tools.call(c["name"], c["args"])
+            result = await asyncio.to_thread(tools.call, c["name"], c["args"])
             db.log("tool", c["name"], json.dumps(result)[:400])
             messages.append({"role": "tool", "tool_call_id": c["id"] or f"call_{i}",
                              "content": json.dumps(result, default=str)})

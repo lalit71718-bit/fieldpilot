@@ -19,7 +19,35 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agora, brain, config, db, tools
+from . import agora, brain, config, db, store_server, tools
+
+async def _order_watcher():
+    """Every 5 s: follow store orders over MCP and announce changes (paid, on the way…)."""
+    words = {"preparing": "Payment approved. {items} is being prepared, arriving around {t}.",
+             "out_for_delivery": "Your order {id} is out for delivery.",
+             "delivered": "Your order {id} has been delivered. Enjoy!",
+             "payment_declined": "The payment for order {id} was declined, so nothing was ordered."}
+    while True:
+        try:
+            orders = json.loads(db.recall("store_orders") or "[]")
+            changed = False
+            for o in orders:
+                if o["last"] in ("delivered", "payment_declined"):
+                    continue
+                st = await asyncio.to_thread(tools._store, "order_status", {"order_id": o["id"]})
+                new = "payment_declined" if st.get("payment") == "declined" else st.get("status")
+                if new and new != o["last"] and new in words:
+                    o["last"] = new; changed = True
+                    t = (st.get("arrives_at") or "")[11:16]
+                    msg = words[new].format(items=", ".join(st.get("items", [])), t=t, id=o["id"])
+                    db.log("order", f"Order {o['id']}: {new.replace('_', ' ')}", msg)
+                    await agora.speak(msg)
+            if changed:
+                db.remember("store_orders", json.dumps(orders))
+        except Exception as e:
+            db.log("error", "Order watcher", str(e)[:200])
+        await asyncio.sleep(5)
+
 
 async def _reminder_clock():
     """Every 10 s: fire due reminders. They show on the dashboard, go to the family channel,
@@ -35,9 +63,11 @@ async def _reminder_clock():
 
 @asynccontextmanager
 async def lifespan(_app):
-    task = asyncio.create_task(_reminder_clock())
-    yield
-    task.cancel()
+    tasks = [asyncio.create_task(_reminder_clock()), asyncio.create_task(_order_watcher())]
+    async with store_server.mcp.session_manager.run():  # the store's MCP endpoint at /store/mcp
+        yield
+    for t in tasks:
+        t.cancel()
 
 
 app = FastAPI(title="HomePilot", lifespan=lifespan)
@@ -113,6 +143,8 @@ def state():
                          "ORDER BY status DESC, id"),
         "shopping_total": tools.shopping_status()["estimated_total_inr"],
         "grocery_orders": db.q("SELECT * FROM grocery_orders ORDER BY created_at DESC"),
+        "store_orders": store_server.all_orders(),
+        "store_cart": store_server._cart(tools.CART_ID),
         "appliance": db.one("SELECT * FROM appliances WHERE id=?", (active,)) if active else None,
         "history": db.q("SELECT * FROM appliance_history WHERE appliance_id=? ORDER BY date DESC",
                         (active,)) if active else [],
@@ -134,6 +166,7 @@ def state():
 @app.post("/api/reset")
 def reset():
     db.reset_db()
+    store_server.reset_store()
     db.log("system", "Demo data reset")
     return {"ok": True}
 
@@ -242,9 +275,34 @@ async def shopping_toggle(request: Request):
     return {"status": "unticked", "item": row["item"]}
 
 
+@app.get("/api/store/order/{order_id}")
+def store_order(order_id: str):
+    """Used by the phone payment page."""
+    for o in store_server.all_orders():
+        if o["order_id"] == order_id.upper():
+            return o
+    raise HTTPException(404, "No such order")
+
+
+@app.post("/api/store/pay")
+async def store_pay(request: Request):
+    """The customer approves or declines the payment request on their phone (demo of the
+    UPI-app step; no PIN or bank details are ever sent here)."""
+    body = await request.json()
+    r = store_server.respond_to_payment(str(body.get("order", "")), bool(body.get("approve")))
+    if r.get("error"):
+        raise HTTPException(404, r["error"])
+    db.log("order", f"Payment {'approved' if body.get('approve') else 'declined'} on phone",
+           r["order_id"])
+    return r
+
+
 @app.get("/healthz")
 def health():
     return {"ok": True}
 
 
+# The demo store's MCP server (what Swiggy / Zomato expose) at /store/mcp
+app.mount("/store", store_server.mcp.streamable_http_app(streamable_http_path="/mcp",
+                                                         stateless_http=True, json_response=True))
 app.mount("/", StaticFiles(directory=config.FRONTEND_DIR, html=True), name="web")

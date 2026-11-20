@@ -355,6 +355,22 @@ def confirm_action(action_id: str, approved: bool) -> dict:
         result = {"status": "done", "order_id": oid, "arriving": _spoken_time(start),
                   "also_done": "added to the calendar" + ("; pickup task closed and Rohan told"
                                                          if task else "")}
+    elif a["kind"] == "store_order":
+        cart = _store("view_cart", {"cart_id": CART_ID})
+        if [(l["item_id"], l["qty"]) for l in cart.get("items", [])] != [tuple(x) for x in p["cart"]]:
+            return {"error": "The cart changed since you confirmed. Read it back again."}
+        r = _store("place_order", {"cart_id": CART_ID, "address": "Home"})
+        if r.get("error"):
+            return r
+        oid = r["order_id"]
+        db.remember("store_last_order", oid)
+        orders = json.loads(db.recall("store_orders") or "[]")
+        orders.append({"id": oid, "last": "awaiting_approval"})
+        db.remember("store_orders", json.dumps(orders[-5:]))
+        db.log("order", f"Store order {oid}: payment requested", a["summary"])
+        result = {"status": "payment_requested", "order_id": oid, "total_inr": r["total_inr"],
+                  "say": "Tell the user the payment request is on their phone (QR on the "
+                         "dashboard); the food is prepared once they approve it."}
     elif a["kind"] == "urgent_alert":
         sent = _send_family(p["message"], urgent=True)
         result = {"status": "done", "delivery": sent}
@@ -547,6 +563,76 @@ def order_groceries() -> dict:
                f"{' including 25 rupees delivery' if fee else ''}, delivered {_spoken_time(t)}.")
     return _pending("order_groceries", {"ids": [r["id"] for r in rows], "total": items_total + fee,
                                         "slot_at": db.iso(t)}, summary)
+
+
+# ---------------------------------------------------------------- Action: ordering over MCP
+CART_ID = "homepilot-anika"
+
+
+def _store(tool: str, args: dict) -> dict:
+    from . import store_client
+    return store_client.call(tool, args)
+
+
+def store_search(query: str) -> dict:
+    """Search the delivery store (food, groceries, snacks, personal care) over MCP."""
+    r = _store("search_items", {"query": query})
+    db.log("store", "Searched store", query)
+    return r
+
+
+def store_add_to_cart(items: list) -> dict:
+    """Add items to the delivery cart: [{"item_id": "F101", "qty": 1}] or names."""
+    if isinstance(items, (str, dict)):
+        items = [items]
+    added, problems, cart = [], [], None
+    for it in items:
+        if isinstance(it, str):
+            it = {"name": it}
+        qty = int(it.get("qty") or it.get("quantity") or 1)
+        item_id = it.get("item_id") or it.get("id")
+        if not item_id:
+            hits = _store("search_items", {"query": it.get("name", "")}).get("results") or []
+            if not hits:
+                problems.append(f"Couldn't find '{it.get('name')}'.")
+                continue
+            item_id = hits[0]["id"]
+        r = _store("add_to_cart", {"cart_id": CART_ID, "item_id": item_id, "qty": qty})
+        if r.get("error"):
+            problems.append(r["error"])
+        else:
+            cart = r["cart"]
+            added.append(next(l["name"] for l in cart["items"] if l["item_id"] == item_id))
+    if added:
+        db.log("store", "Added to cart", ", ".join(added))
+    return {"added": added, "problems": problems, "cart": cart or _store("view_cart", {"cart_id": CART_ID})}
+
+
+def store_view_cart() -> dict:
+    """Show the delivery cart and total."""
+    return _store("view_cart", {"cart_id": CART_ID})
+
+
+def store_checkout() -> dict:
+    """Read back the cart and prepare the order. Needs the user's yes; then payment is
+    approved on their phone."""
+    cart = _store("view_cart", {"cart_id": CART_ID})
+    if cart.get("error") or not cart.get("items"):
+        return {"error": cart.get("error") or "The cart is empty."}
+    items = ", ".join(f"{l['qty']} {l['name']}" for l in cart["items"])
+    fee = f" including {cart['delivery_fee_inr']} rupees delivery" if cart["delivery_fee_inr"] else ""
+    summary = (f"Order {items} from FreshMart for {cart['total_inr']} rupees{fee}, arriving in "
+               f"about {cart['eta_min']} minutes. You'll approve the payment on your phone.")
+    return _pending("store_order", {"cart": [(l["item_id"], l["qty"]) for l in cart["items"]],
+                                    "total": cart["total_inr"]}, summary)
+
+
+def store_order_status(order_id: str = "") -> dict:
+    """Payment and delivery status of the latest (or a given) store order."""
+    oid = order_id or db.recall("store_last_order")
+    if not oid:
+        return {"error": "No store order yet."}
+    return _store("order_status", {"order_id": oid})
 
 
 def assign_task(title: str, assignee: str, due_at: str = "") -> dict:
@@ -877,6 +963,19 @@ TOOLS = {
     "order_groceries": (order_groceries, _s(
         "Prepare a home delivery for everything on the list (needs the user's yes). Picks a "
         "delivery slot that avoids the family calendar.")),
+    "store_search": (store_search, _s(
+        "Search the delivery store over MCP: food (biryani, dosa…), groceries, snacks, personal care.",
+        {"query": STR}, ["query"])),
+    "store_add_to_cart": (store_add_to_cart, _s(
+        "Add items to the delivery cart (item_id from store_search, or a name) with quantity.",
+        {"items": {"type": "array", "items": {"type": "object", "properties": {
+            "item_id": STR, "name": STR, "qty": {"type": "integer"}}}}}, ["items"])),
+    "store_view_cart": (store_view_cart, _s("Show the delivery cart and total.")),
+    "store_checkout": (store_checkout, _s(
+        "Read back the cart and prepare the order (needs the user's yes; payment is then "
+        "approved on their phone).")),
+    "store_order_status": (store_order_status, _s(
+        "Payment and delivery status of the latest store order.", {"order_id": STR})),
     "assign_task": (assign_task, _s(
         "Give a family member a task and notify them.",
         {"title": STR, "assignee": STR, "due_at": WHEN}, ["title", "assignee"])),

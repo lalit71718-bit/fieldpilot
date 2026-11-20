@@ -36,10 +36,11 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | **During:** understand priorities, coordinate by conversation | Contextual memory every turn (family, active issue, pending approvals). Appliance help from the **owner's manual (RAG)** plus **repeat-fault detection** from service history |
 | **Action:** calendars, shopping lists, tasks, service requests via APIs | `find_service_slots` checks technicians **against the family calendar and quiet hours**; `book_service` (needs a spoken yes); `add_event`, `add_to_shopping_list`, `assign_task` (notifies the person on Slack) |
 | **Shopping, end to end** | `add_to_shopping_list`, `mark_bought`, `remove_from_shopping_list`, `shopping_status` (estimated total), `order_groceries` (home delivery slot that avoids the calendar, needs a yes). Rohan gets a **live list on his phone** (`/list.html`) and ticks items in the store; when the last one is ticked his pickup task completes and the family is told |
+| **Ordering by voice over MCP** | “Order a veg biryani” → `store_search` → `store_add_to_cart` → `store_checkout` reads back items, total and time → **“yes”** → the store requests payment and **you approve it on your phone** (QR on the dashboard, `/pay.html`) → live status: preparing, on the way, delivered, announced in the call. HomePilot talks to the store **only through MCP** (`backend/store_client.py` → `/store/mcp`), the same protocol as Swiggy’s and Zomato’s official MCP servers |
 | **After:** reminders, completion tracking, follow-ups | Booking adds a calendar event and a reminder 30 minutes before; `set_reminder` / `cancel_reminder` (Dadi's medicine, alarms), `complete_task`, `daily_summary` posted to the family channel. **Reminders really ring**: a background clock fires them, the dashboard pops up with a chime, HomePilot **says them out loud in the live call** (Agora speak API) and posts them to the family channel |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
-| **Tool calling, memory, external APIs** | 20 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+| **Tool calling, memory, external APIs** | 25 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
 
 ## Safety and reliability
 - **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
@@ -143,6 +144,15 @@ backend/
 frontend/          index.html = website, app.html = voice panel + live dashboard, expert.html = join-the-call page
 tests/
 ```
+
+## Ordering from real apps (Swiggy, Zomato…)
+HomePilot is MCP-native: `STORE_MCP_URL` points the ordering tools at any MCP commerce server.
+Today it uses **FreshMart, our demo store** (`backend/store_server.py`), because both
+[Swiggy](https://github.com/Swiggy/swiggy-mcp-server-manifest) and
+[Zomato](https://github.com/Zomato/mcp-server-manifest) currently allow their official MCP
+servers only for approved clients and personal use, not third-party apps. Payment stays with the
+customer: the store sends a payment request that is approved in their own UPI app with their PIN;
+HomePilot never sees a PIN or bank details (see NPCI’s UPI Reserve Pay for agent payments).
 
 ## What's next
 - Real integrations: Google Calendar, WhatsApp, a grocery delivery API, Urban Company-style service booking.

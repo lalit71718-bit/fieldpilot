@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomePilot · Approve payment (demo)</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="list-page">
+  <header class="topbar">
+    <div class="brand"><span class="logo">HP</span> homepilot <small>payment request</small></div>
+    <div class="chips"><span class="chip">Demo</span></div>
+  </header>
+  <main class="list-wrap">
+    <p class="mono demo-note">Demo payment step. In real use this request opens in your own UPI app, where you approve it with your PIN. HomePilot never sees a PIN or bank details.</p>
+    <div class="card pay-card">
+      <p class="muted" id="merchant">FreshMart (demo store)</p>
+      <p class="pay-amount" id="amount">₹—</p>
+      <ul id="items" class="shop-list"></ul>
+      <p class="mono muted" id="oid"></p>
+    </div>
+    <div id="actions" class="pay-actions">
+      <button id="approve" class="big">Approve payment</button>
+      <button id="decline" class="ghost big">Decline</button>
+    </div>
+    <div id="result" class="card hidden"></div>
+  </main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const order = new URLSearchParams(location.search).get("order") || "";
+const label = { awaiting_payment: "Waiting for your approval", preparing: "Paid · being prepared", out_for_delivery: "On the way", delivered: "Delivered", payment_declined: "Declined · nothing was charged" };
+function show(o) {
+  $("amount").textContent = `₹${o.total_inr}`;
+  $("items").innerHTML = o.items.map((i) => `<li>${esc(i)}</li>`).join("");
+  $("oid").textContent = `Order ${o.order_id}`;
+  const done = o.payment !== "awaiting_approval";
+  $("actions").classList.toggle("hidden", done);
+  $("result").classList.toggle("hidden", !done);
+  if (done) $("result").innerHTML = `<h3>${o.payment === "approved" ? "✓ Payment approved" : "Payment declined"}</h3>
+    <p class="pay-status">${esc(label[o.status] || o.status)}</p>
+    ${o.arrives_at ? `<p class="muted">Arrives around ${esc(o.arrives_at.slice(11, 16))}</p>` : ""}`;
+}
+async function load() {
+  if (!order) { $("amount").textContent = "No order"; $("actions").classList.add("hidden"); return; }
+  const r = await fetch(`/api/store/order/${encodeURIComponent(order)}`);
+  if (!r.ok) { $("amount").textContent = "Order not found"; $("actions").classList.add("hidden"); return; }
+  show(await r.json());
+}
+async function respond(approve) {
+  $("approve").disabled = $("decline").disabled = true;
+  if (navigator.vibrate) navigator.vibrate(30);
+  const r = await fetch("/api/store/pay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order, approve }) });
+  if (r.ok) show(await r.json());
+}
+$("approve").onclick = () => respond(true);
+$("decline").onclick = () => respond(false);
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>

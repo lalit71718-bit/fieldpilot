@@ -463,3 +463,29 @@ def test_grocery_order_needs_yes_avoids_calendar_and_closes_pickup():
     assert "no need to stop at the shop" in db.q("SELECT message FROM notifications")[-1]["message"]
     again = tools.call("order_groceries", {})
     assert again.get("status") == "already_ordered" or "error" in again
+
+
+def test_store_order_over_mcp_needs_yes_then_phone_approval(monkeypatch):
+    from backend import config, store_server
+    monkeypatch.setattr(config, "STORE_MCP_URL", "internal")  # same MCP protocol, in-process
+    store_server.reset_store()
+    hits = tools.call("store_search", {"query": "veg biryani"})["results"]
+    assert hits[0]["name"] == "Veg Biryani" and hits[0]["price_inr"] == 139
+    cart = tools.call("store_add_to_cart", {"items": [{"name": "kurkure", "qty": 2}, {"item_id": "F101"}]})["cart"]
+    assert cart["total_inr"] == 2 * 20 + 139
+    p = tools.call("store_checkout", {})
+    assert p["status"] == "awaiting_confirmation" and "You'll approve the payment on your phone" in p["summary"]
+    assert store_server.all_orders() == []                     # nothing ordered before "yes"
+    db.remember("last_user_text", "yes place it")
+    r = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert r["status"] == "payment_requested"
+    st = tools.call("store_order_status", {})
+    assert st["payment"] == "awaiting_approval" and st["status"] == "awaiting_payment"
+    c = TestClient(app)
+    assert c.post("/api/store/pay", json={"order": r["order_id"], "approve": True}).json()["status"] == "preparing"
+    assert tools.call("store_order_status", {})["payment"] == "approved"
+    # a declined payment orders nothing
+    tools.call("store_add_to_cart", {"items": ["ghee"]})
+    p2 = tools.call("store_checkout", {})
+    r2 = tools.call("confirm_action", {"action_id": p2["action_id"], "approved": True})
+    assert c.post("/api/store/pay", json={"order": r2["order_id"], "approve": False}).json()["payment"] == "declined"

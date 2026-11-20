@@ -50,6 +50,9 @@ AGORA_TTS_PARAMS_JSON = env("AGORA_TTS_PARAMS_JSON")
 
 SLACK_WEBHOOK_URL = env("SLACK_WEBHOOK_URL")
 
+# MCP commerce server HomePilot orders from (empty = the demo store on this server).
+STORE_MCP_URL = env("STORE_MCP_URL")
+
 DB_PATH = Path(env("FIELDPILOT_DB", str(ROOT / "data" / "fieldpilot.db")))
 MANUALS_DIR = ROOT / "backend" / "manuals"
 FRONTEND_DIR = ROOT / "frontend"

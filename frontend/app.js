@@ -304,6 +304,34 @@ function render(s) {
       `<li class="${i.joined ? "joined" : ""}">${i.joined ? "✓" : "…"} <b>${esc(i.who)}</b> ${i.joined ? "joined" : "waiting to join"}${i.guest ? ' <span class="muted">(guest)</span>' : ""}</li>`).join("");
   } else card.classList.add("hidden");
 
+  // Store order placed over MCP: payment QR, then the delivery progress.
+  const so = (s.store_orders || [])[0], sc = s.store_cart;
+  const storeCard = $("store");
+  if (so) {
+    storeCard.classList.remove("hidden");
+    const link = location.origin + so.payment_link;
+    if (storeCard.dataset.link !== link) {
+      storeCard.dataset.link = link;
+      if (window.qrcode) { const q = qrcode(0, "M"); q.addData(link); q.make(); $("store-qr").innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }
+    }
+    const waiting = so.payment === "awaiting_approval";
+    $("store-qr").style.display = waiting ? "" : "none";
+    storeCard.style.gridTemplateColumns = waiting ? "" : "1fr";
+    $("store-title").textContent = `${so.items.join(", ")} · ₹${so.total_inr}`;
+    const order = ["awaiting_payment", "preparing", "out_for_delivery", "delivered"];
+    const names = ["Approve on phone", "Preparing", "On the way", "Delivered"];
+    const at = so.payment === "declined" ? -1 : order.indexOf(so.status);
+    $("store-steps").innerHTML = names.map((n, i) => `<span class="${i < at || so.status === "delivered" ? "done" : i === at ? "now" : ""}">${n}</span>`).join("");
+    $("store-sub").innerHTML = so.payment === "declined" ? "Payment declined on the phone. Nothing was ordered."
+      : waiting ? `Scan to approve <b>₹${so.total_inr}</b> on your phone · <a href="${so.payment_link}" target="_blank" rel="noopener">open payment page</a>`
+      : `${esc(so.order_id)} · arrives around ${esc((so.arrives_at || "").slice(11, 16))}`;
+  } else if (sc && sc.items && sc.items.length) {
+    storeCard.classList.remove("hidden");
+    $("store-qr").style.display = "none"; storeCard.style.gridTemplateColumns = "1fr";
+    $("store-title").textContent = `Cart: ${sc.items.map((l) => `${l.qty} × ${l.name}`).join(", ")} · ₹${sc.total_inr}`;
+    $("store-steps").innerHTML = ""; $("store-sub").textContent = "Say “yes” to place the order.";
+  } else storeCard.classList.add("hidden");
+
   // Family member on the live call.
   const chip = $("chip-expert");
   chip.classList.toggle("hidden", !s.expert_called);
