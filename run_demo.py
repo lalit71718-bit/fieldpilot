@@ -92,8 +92,20 @@ def wait_until_public(url: str, timeout: float = 60.0) -> bool:
     return False
 
 
+def port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main() -> None:
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    if port_in_use(PORT):
+        sys.exit(f"Port {PORT} is already in use: an old server is still running.\n"
+                 "Close the other window running uvicorn / run_demo.py (Ctrl+C), or run\n"
+                 f"  netstat -ano | findstr :{PORT}\n"
+                 "and stop it with: taskkill /PID <the number at the end> /F\n"
+                 "Then run: python run_demo.py")
     tunnel = None
     if "--no-tunnel" not in sys.argv:
         tunnel, url = start_tunnel()
