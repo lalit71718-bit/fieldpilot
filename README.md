@@ -2,7 +2,7 @@
 
 > **Build with Agora, Bengaluru 2026** · Track **PS-2: From Workplace Assistance to Intelligent Action** (Field Technician Copilot)
 >
-> 🎥 **Demo video:** [add link] · 📊 **Pitch deck:** [add link] · 👥 **Team:** [team name: names]
+> 🎥 **Demo video:** [add link] · 📊 **Pitch deck:** [add link] · 👥 **Team SpeakX:** Lalit Kumar Singh
 
 A technician fixing a broken machine has both hands busy. They just **talk**. FieldPilot pulls up
 their ticket and the machine's history, walks them through the repair using the service manual,
