@@ -11,6 +11,8 @@ books it **only after she says yes**, puts it on the family calendar with a remi
 to the shopping list, asks Rohan to pick them up, reminds Dadi about her BP tablet, ticks off
 Kabir's chore and sends everyone an update. It can even bring Rohan into the live voice call.
 
+![HomePilot website](docs/website.png)
+
 ![HomePilot dashboard after a full voice run](docs/dashboard.png)
 
 ## How it meets the problem statement
@@ -55,7 +57,7 @@ Kabir's chore and sends everyone an update. It can even bring Rohan into the liv
 
 ## Demo script
 
-Click **Reset demo**, then the mic. HomePilot opens with the day's briefing.
+Open the website at `/` (hero, how it works, features, a live “Try it” box, an interactive safety demo), then **Open the app** (`/app.html`). Click **Reset demo**, then the mic. HomePilot opens with the day's briefing.
 
 | Step | Anika says | What happens on screen |
 |---|---|---|
@@ -122,7 +124,7 @@ backend/
   integrations.py  Slack webhook (family channel)
   mcp_server.py    MCP server over the same tools
   manuals/         appliance owner's manuals used for RAG
-frontend/          voice panel + live family dashboard; expert.html = join-the-call page
+frontend/          index.html = website, app.html = voice panel + live dashboard, expert.html = join-the-call page
 tests/
 ```
 

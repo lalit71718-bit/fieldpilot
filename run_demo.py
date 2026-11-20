@@ -126,7 +126,8 @@ def main() -> None:
               "text mode still works.")
     app = f"http://localhost:{PORT}"
     print("\n" + "=" * 60)
-    print(f"  HomePilot is running:  {app}")
+    print(f"  HomePilot website:      {app}")
+    print(f"  HomePilot app:          {app}/app.html")
     print(f"  Health check:           {app}/api/diag")
     print("  Press Ctrl+C to stop.")
     print("=" * 60 + "\n")

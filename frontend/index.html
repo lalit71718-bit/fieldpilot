@@ -3,80 +3,271 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>HomePilot</title>
-  <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.22.0/AgoraRTC_N-production.js"></script>
+  <title>HomePilot · The voice assistant that runs your family's day</title>
+  <meta name="description" content="HomePilot is a voice-first family assistant. It plans the day, books home services around the family calendar, manages shopping and chores, and reminds everyone, just by talking.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="site.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="logo">HP</span> HomePilot <small>your family's voice assistant</small></div>
-    <div class="chips">
-      <span id="chip-rtc" class="chip">Voice: offline</span>
-      <span id="chip-agent" class="chip">Assistant: idle</span>
-      <span id="chip-expert" class="chip hidden">Family call: invited</span>
-      <span class="chip saved">Time saved: <b id="saved">0</b> min</span>
-      <button id="reset" class="ghost" title="Reseed demo data">Reset demo</button>
+  <!-- ============ NAV ============ -->
+  <header class="nav" id="top">
+    <div class="wrap nav-inner">
+      <a href="#top" class="logo" aria-label="HomePilot home"><span class="logo-mark">HP</span>HomePilot</a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#try">Try it</a>
+        <a href="#safety">Safety</a>
+        <a href="#tech">Tech</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <a href="/app.html" class="btn btn-primary btn-sm">Open the app</a>
+      <button class="menu-btn" aria-label="Open menu" aria-expanded="false" id="menu-btn"><span></span><span></span></button>
     </div>
   </header>
 
-  <main class="grid">
-    <!-- LEFT: conversation -->
-    <section class="card call">
-      <div class="mic-wrap">
-        <button id="mic" class="mic" aria-label="Start voice session"><span class="ring"></span><span class="icon">🎙</span></button>
-        <div>
-          <div id="call-status" class="call-status">Tap to talk to HomePilot</div>
-          <div id="call-hint" class="muted">Say: "What's on today?"</div>
+  <main>
+    <!-- ============ HERO ============ -->
+    <section class="hero">
+      <div class="glow glow-a"></div><div class="glow glow-b"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy reveal">
+          <p class="eyebrow"><span class="dot"></span> Voice-first family assistant · Built with Agora</p>
+          <h1>Your home runs on a hundred small decisions. <span class="grad">Just say them out loud.</span></h1>
+          <p class="lead">HomePilot listens, plans and acts. It books the AC repair around grandma’s doctor visit, puts milk on the list, asks your partner to pick it up and reminds everyone, while you keep your hands free.</p>
+          <div class="hero-ctas">
+            <a href="/app.html" class="btn btn-primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-2.1A7 7 0 0 0 19 12Z"/></svg>Talk to HomePilot</a>
+            <a href="#how" class="btn btn-ghost">See how it works</a>
+          </div>
+          <ul class="hero-proof">
+            <li><b>~2 s</b> per spoken reply in our tests</li>
+            <li><b>16</b> real household actions</li>
+            <li><b>0</b> apps to open</li>
+          </ul>
+        </div>
+
+        <!-- live conversation mock -->
+        <div class="device reveal" aria-label="Example conversation with HomePilot">
+          <div class="device-top">
+            <div class="orb" id="orb"><span></span><span></span><span></span></div>
+            <div>
+              <div class="device-title">HomePilot</div>
+              <div class="device-sub" id="device-status">Listening…</div>
+            </div>
+            <span class="live-pill">LIVE</span>
+          </div>
+          <div class="chat" id="hero-chat" aria-live="polite"></div>
+          <div class="actions" id="hero-actions"></div>
         </div>
       </div>
-      <div id="setup" class="setup hidden"></div>
-      <h3>Conversation</h3>
-      <div id="transcript" class="transcript"></div>
-      <form id="text-form" class="text-form">
-        <input id="text-input" placeholder="Or type to HomePilot (backup mode)..." autocomplete="off">
-        <button>Send</button>
-      </form>
     </section>
 
-    <!-- RIGHT: the family's connected services -->
-    <section class="board">
-      <div class="kpis">
-        <div class="kpi"><span class="kpi-label">Events next 24h</span><span id="kpi-events" class="kpi-val">-</span></div>
-        <div class="kpi"><span class="kpi-label">Open family tasks</span><span id="kpi-tasks" class="kpi-val">-</span></div>
-        <div class="kpi"><span class="kpi-label">Actions automated</span><span id="kpi-actions" class="kpi-val">0</span></div>
-        <div class="kpi"><span class="kpi-label">Shopping list</span><span id="kpi-shop" class="kpi-val">0</span></div>
+    <!-- ============ POWERED BY ============ -->
+    <section class="band" aria-label="Technology partners">
+      <div class="wrap band-inner">
+        <span>Agora Conversational AI</span><i></i>
+        <span>Agora RTC</span><i></i>
+        <span>Murf Falcon TTS</span><i></i>
+        <span>Tool calling + MCP</span><i></i>
+        <span>RAG over manuals</span>
       </div>
-      <div id="pending" class="pending hidden"></div>
-      <div id="insight" class="insight-banner hidden"></div>
+    </section>
 
-      <div class="two">
-        <div class="card"><h3>Family calendar</h3><div id="calendar"></div></div>
-        <div class="card">
-          <div class="card-head"><h3>Home issue</h3><span id="issue-status" class="pill">-</span></div>
-          <div id="issue" class="ticket muted">No appliance problem reported.</div>
+    <!-- ============ PROBLEM ============ -->
+    <section class="section">
+      <div class="wrap">
+        <p class="eyebrow center reveal">The problem</p>
+        <h2 class="center reveal">Running a home is a full-time coordination job.</h2>
+        <div class="pain-grid">
+          <article class="pain reveal">
+            <div class="pain-icon">📱</div>
+            <h3>Five apps, one tired parent</h3>
+            <p>Calendar, family chat, shopping list, reminders, service apps. Every update is typed by hand.</p>
+          </article>
+          <article class="pain reveal">
+            <div class="pain-icon">🔧</div>
+            <h3>Breakdowns at the worst time</h3>
+            <p>The AC fails on a hot afternoon. Who do you call? When is everyone free? Didn’t this happen before?</p>
+          </article>
+          <article class="pain reveal">
+            <div class="pain-icon">🧠</div>
+            <h3>Things fall through</h3>
+            <p>Grandma’s medicine, the kids’ chores, the follow-ups. They live in someone’s head until they’re missed.</p>
+          </article>
         </div>
       </div>
+    </section>
 
-      <div class="two">
-        <div class="card"><h3>Family tasks</h3><div id="tasks"></div></div>
-        <div class="card"><h3>Shopping list</h3><div id="shopping"></div></div>
+    <!-- ============ HOW IT WORKS ============ -->
+    <section class="section alt" id="how">
+      <div class="wrap">
+        <p class="eyebrow center reveal">How it works</p>
+        <h2 class="center reveal">One conversation. The whole day handled.</h2>
+        <p class="sub center reveal">Every request follows the same loop: know the context, understand the need, act through real tools, then follow up.</p>
+        <ol class="steps">
+          <li class="step reveal">
+            <span class="step-n">01</span><h3>Before</h3>
+            <p class="say">“What’s on today?”</p>
+            <p>Reads the family calendar, open chores, reminders and household preferences, and briefs you the moment the call starts.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step-n">02</span><h3>During</h3>
+            <p class="say">“The AC shows E4 again.”</p>
+            <p>Checks the service history, spots that this is the third E4 in 64 days, and walks you through one safe check from the manual.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step-n">03</span><h3>Action</h3>
+            <p class="say">“Get someone to fix it.”</p>
+            <p>Finds technician slots, skips the one that clashes with Dadi’s doctor visit, and books only after your spoken “yes”.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step-n">04</span><h3>After</h3>
+            <p class="say">“Update the family.”</p>
+            <p>Adds the visit to the calendar with a reminder, assigns the grocery run, and posts a summary to the family channel.</p>
+          </li>
+        </ol>
       </div>
+    </section>
 
-      <div class="two">
-        <div class="card"><h3>Reminders</h3><div id="reminders"></div></div>
-        <div class="card"><h3>Family channel (Slack)</h3><div id="notifications" class="feed"></div></div>
+    <!-- ============ FEATURES ============ -->
+    <section class="section" id="features">
+      <div class="wrap">
+        <p class="eyebrow center reveal">Features</p>
+        <h2 class="center reveal">Everything a busy household needs, by voice.</h2>
+        <div class="feature-grid">
+          <article class="feature reveal tilt"><div class="f-icon">☀️</div><h3>Daily briefing</h3><p>Starts every call with what matters today: events, chores and reminders.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">🕵️</div><h3>Repeat-fault detective</h3><p>Reads the appliance’s history and tells you the root cause, not just “turn it off and on”.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">📅</div><h3>Calendar-aware booking</h3><p>Never books a technician over a family event or after 8 PM quiet hours.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">🛒</div><h3>Shopping and chores</h3><p>Adds items without duplicates and assigns the pickup to the right person, who gets notified.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">⏰</div><h3>Reminders that ring</h3><p>Medicine, alarms and nudges are spoken out loud in the call and pop up on the dashboard.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">📞</div><h3>Bring family into the call</h3><p>“Get Rohan on this call.” He taps a link and joins the same live voice call from his phone.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">💾</div><h3>Remembers what matters</h3><p>Birthdays, preferences and details you ask it to keep, recalled in later conversations.</p></article>
+          <article class="feature reveal tilt"><div class="f-icon">⌨️</div><h3>Voice or text</h3><p>Talk hands-free, or type when the room is loud. Same assistant, same results.</p></article>
+        </div>
       </div>
+    </section>
 
-      <div class="card"><h3>Assistant activity <small class="muted">tools, knowledge, actions</small></h3><div id="activity" class="timeline"></div></div>
+    <!-- ============ TRY IT ============ -->
+    <section class="section alt" id="try">
+      <div class="wrap try-grid">
+        <div class="reveal">
+          <p class="eyebrow">Try it now</p>
+          <h2>Ask the real assistant.</h2>
+          <p class="sub">This box talks to the same HomePilot brain as the voice app, with the demo family’s calendar, chores and appliances. Pick a prompt or type your own.</p>
+          <div class="chips" id="try-chips">
+            <button class="chip">What’s on today?</button>
+            <button class="chip">The living room AC is showing E4 again.</button>
+            <button class="chip">Add milk and paneer to the shopping list.</button>
+            <button class="chip">Remind Dadi to take her BP tablet at 8 PM.</button>
+          </div>
+          <p class="fine">For the full experience with voice and a live dashboard, <a href="/app.html">open the app</a>.</p>
+        </div>
+        <div class="try-box reveal">
+          <div class="try-log" id="try-log" aria-live="polite">
+            <div class="bubble bot">Hi, I’m HomePilot. Ask me anything about the family’s day.</div>
+          </div>
+          <form class="try-form" id="try-form">
+            <input id="try-input" placeholder="Type a request…" autocomplete="off" aria-label="Your request">
+            <button class="btn btn-primary btn-sm" id="try-send">Send</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SAFETY ============ -->
+    <section class="section" id="safety">
+      <div class="wrap safety-grid">
+        <div class="confirm-demo reveal" aria-label="Interactive confirmation demo">
+          <p class="demo-label">Try the confirmation step</p>
+          <div class="confirm-card" id="confirm-card">
+            <div class="confirm-head">⏳ Waiting for your OK</div>
+            <p>Book <b>CoolCare Services</b> for the living room AC <b>tomorrow at 2:30 PM</b>, visit fee <b>₹499</b>.</p>
+            <div class="confirm-btns">
+              <button class="btn btn-primary btn-sm" data-answer="yes">“Yes, book it.”</button>
+              <button class="btn btn-ghost btn-sm" data-answer="no">“No, don’t book it.”</button>
+            </div>
+          </div>
+          <div class="confirm-result" id="confirm-result" aria-live="polite"></div>
+        </div>
+        <div class="reveal">
+          <p class="eyebrow">Built for trust</p>
+          <h2>An assistant that acts in your home must never act wrongly.</h2>
+          <ul class="checks">
+            <li><b>Human in the loop.</b> Anything that costs money waits for a spoken “yes”.</li>
+            <li><b>“No” means no, in code.</b> If your last words were a refusal, the action is cancelled even if the AI tries to approve it.</li>
+            <li><b>No double actions.</b> Saying it twice never books twice or adds the same item again.</li>
+            <li><b>Honest about itself.</b> It never invents features, times or confirmations it didn’t really do.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TECH ============ -->
+    <section class="section alt" id="tech">
+      <div class="wrap">
+        <p class="eyebrow center reveal">Under the hood</p>
+        <h2 class="center reveal">Agora carries the voice. Our brain plans and acts.</h2>
+        <div class="flow reveal">
+          <div class="node"><span class="node-tag">Family</span><b>Browser and phone</b><small>Agora RTC channel</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node"><span class="node-tag">Agora</span><b>Conversational AI</b><small>Speech to text, turn-taking</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node node-brain"><span class="node-tag">HomePilot brain</span><b>Tool-calling agent</b><small>Memory · RAG · 16 tools · MCP</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node"><span class="node-tag">Services</span><b>Home APIs</b><small>Calendar · chores · booking · Slack</small></div>
+        </div>
+        <p class="flow-note reveal">Replies stream back through Agora and are spoken by <b>Murf Falcon TTS</b>. The same 16 tools are also served over <b>MCP</b>, so other AI agents can use them.</p>
+
+        <div class="stats">
+          <div class="stat reveal"><span class="stat-num" data-count="16">0</span><span>household tools</span></div>
+          <div class="stat reveal"><span class="stat-num" data-count="2" data-prefix="~" data-suffix=" s">0</span><span>per voice turn, measured</span></div>
+          <div class="stat reveal"><span class="stat-num" data-count="26">0</span><span>automated tests</span></div>
+          <div class="stat reveal"><span class="stat-num" data-count="2">0</span><span>AI providers with instant failover</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ FAQ ============ -->
+    <section class="section" id="faq">
+      <div class="wrap narrow">
+        <p class="eyebrow center reveal">FAQ</p>
+        <h2 class="center reveal">Questions we get asked</h2>
+        <div class="faq reveal">
+          <details><summary>Is this real or a mock-up?</summary><p>The voice, the AI and every action are real and running. The family, calendar and appliance records are demo data stored in a database, and Slack messages are really sent. Each service can be swapped for a live API (Google Calendar, WhatsApp, a booking platform) without changing the assistant.</p></details>
+          <details><summary>What happens if it mishears me?</summary><p>Anything that costs money is read back and waits for your “yes”. Saying “no”, “wait” or “don’t” cancels it, and that rule is enforced in code, not left to the AI.</p></details>
+          <details><summary>Which AI does it use?</summary><p>Open models on Groq (gpt-oss-120b, with a smaller one as backup) and Gemini as a second provider. If one is slow or busy, HomePilot switches instantly so you never hear silence.</p></details>
+          <details><summary>Can my family use it too?</summary><p>Yes. Any family member can be invited into the live call from their phone, gets their own tasks and reminders, and sees updates in the family channel.</p></details>
+          <details><summary>What can’t it do?</summary><p>It doesn’t book travel, place phone calls or shop online yet. It tells you so plainly instead of pretending.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA ============ -->
+    <section class="cta">
+      <div class="wrap cta-inner reveal">
+        <h2>Less juggling. More family.</h2>
+        <p>Open HomePilot, tap the mic and say “What’s on today?”</p>
+        <a href="/app.html" class="btn btn-dark">Open the app →</a>
+      </div>
     </section>
   </main>
-  <div id="alarm" class="alarm hidden" role="alertdialog" aria-live="assertive">
-    <div class="alarm-box">
-      <div class="alarm-icon">⏰</div>
-      <div id="alarm-text" class="alarm-text"></div>
-      <button id="alarm-ok">Got it</button>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div>
+        <a href="#top" class="logo"><span class="logo-mark">HP</span>HomePilot</a>
+        <p>Built by <b>Team SpeakX</b> (Lalit Kumar Singh) for Build with Agora, Bengaluru 2026.</p>
+      </div>
+      <div class="footer-links">
+        <a href="/app.html">Open the app</a>
+        <a href="https://github.com/lalit71718-bit/fieldpilot" target="_blank" rel="noopener">Source on GitHub</a>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
+      </div>
     </div>
-  </div>
-  <script src="app.js"></script>
+  </footer>
+
+  <script src="site.js"></script>
 </body>
 </html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomePilot · App</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.22.0/AgoraRTC_N-production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" title="Back to the HomePilot website"><span class="logo">HP</span> HomePilot <small>your family's voice assistant</small></a>
+    <div class="chips">
+      <span id="chip-rtc" class="chip">Voice: offline</span>
+      <span id="chip-agent" class="chip">Assistant: idle</span>
+      <span id="chip-expert" class="chip hidden">Family call: invited</span>
+      <span class="chip saved">Time saved: <b id="saved">0</b> min</span>
+      <button id="reset" class="ghost" title="Reseed demo data">Reset demo</button>
+      <a class="ghost-link" href="/">Website</a>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- LEFT: conversation -->
+    <section class="card call">
+      <div class="mic-wrap">
+        <button id="mic" class="mic" aria-label="Start voice session"><span class="ring"></span><span class="icon">🎙</span></button>
+        <div>
+          <div id="call-status" class="call-status">Tap to talk to HomePilot</div>
+          <div id="call-hint" class="muted">Say: "What's on today?"</div>
+        </div>
+      </div>
+      <div id="setup" class="setup hidden"></div>
+      <h3>Conversation</h3>
+      <div id="transcript" class="transcript"></div>
+      <form id="text-form" class="text-form">
+        <input id="text-input" placeholder="Or type to HomePilot (backup mode)..." autocomplete="off">
+        <button>Send</button>
+      </form>
+    </section>
+
+    <!-- RIGHT: the family's connected services -->
+    <section class="board">
+      <div class="kpis">
+        <div class="kpi"><span class="kpi-label">Events next 24h</span><span id="kpi-events" class="kpi-val">-</span></div>
+        <div class="kpi"><span class="kpi-label">Open family tasks</span><span id="kpi-tasks" class="kpi-val">-</span></div>
+        <div class="kpi"><span class="kpi-label">Actions automated</span><span id="kpi-actions" class="kpi-val">0</span></div>
+        <div class="kpi"><span class="kpi-label">Shopping list</span><span id="kpi-shop" class="kpi-val">0</span></div>
+      </div>
+      <div id="pending" class="pending hidden"></div>
+      <div id="insight" class="insight-banner hidden"></div>
+
+      <div class="two">
+        <div class="card"><h3>Family calendar</h3><div id="calendar"></div></div>
+        <div class="card">
+          <div class="card-head"><h3>Home issue</h3><span id="issue-status" class="pill">-</span></div>
+          <div id="issue" class="ticket muted">No appliance problem reported.</div>
+        </div>
+      </div>
+
+      <div class="two">
+        <div class="card"><h3>Family tasks</h3><div id="tasks"></div></div>
+        <div class="card"><h3>Shopping list</h3><div id="shopping"></div></div>
+      </div>
+
+      <div class="two">
+        <div class="card"><h3>Reminders</h3><div id="reminders"></div></div>
+        <div class="card"><h3>Family channel (Slack)</h3><div id="notifications" class="feed"></div></div>
+      </div>
+
+      <div class="card"><h3>Assistant activity <small class="muted">tools, knowledge, actions</small></h3><div id="activity" class="timeline"></div></div>
+    </section>
+  </main>
+  <div id="alarm" class="alarm hidden" role="alertdialog" aria-live="assertive">
+    <div class="alarm-box">
+      <div class="alarm-icon">⏰</div>
+      <div id="alarm-text" class="alarm-text"></div>
+      <button id="alarm-ok">Got it</button>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
