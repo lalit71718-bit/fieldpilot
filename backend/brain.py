@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from openai import APIError, APIStatusError, AsyncOpenAI, RateLimitError
+from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from . import config, db, tools
 
@@ -68,7 +68,7 @@ HOW YOU WORK
 
 def _client(base_url: str, api_key: str) -> AsyncOpenAI:
     # No silent SDK retries: on a rate limit we switch model instantly instead of waiting.
-    return AsyncOpenAI(base_url=base_url, api_key=api_key or "missing", max_retries=0, timeout=20)
+    return AsyncOpenAI(base_url=base_url, api_key=api_key or "missing", max_retries=0, timeout=8)
 
 
 def _targets() -> list[tuple[AsyncOpenAI, str]]:
@@ -104,6 +104,8 @@ def _cool(model: str, e: Exception) -> None:
     text = _err(e)
     if getattr(e, "status_code", None) == 404:
         _cooldown[model] = time.time() + 3600
+    elif isinstance(e, APITimeoutError):
+        _cooldown[model] = time.time() + 300  # hanging model: voice can't wait for it
     elif isinstance(e, RateLimitError):
         m = re.search(r"try again in ([\d.]+)(ms|s)", text)
         wait = (float(m.group(1)) / (1000 if m.group(2) == "ms" else 1)) if m else 20
