@@ -329,3 +329,26 @@ def test_alarms_set_dedupe_cancel_and_fire():
     assert TestClient(app).get("/api/state").json()["fired"][0]["title"] == "Reminder for Dadi"
     td = agora.join_body("ch", 1)["properties"]["turn_detection"]["config"]["end_of_speech"]
     assert td["mode"] == "semantic" and td["semantic_config"]["pause_state_enabled"] is True
+
+
+def test_guards_from_live_test():
+    # shopping: synonyms and plurals are not added twice
+    tools.call("add_to_shopping_list", {"items": ["Dadi's BP tablets", "milk"]})
+    r = tools.call("add_to_shopping_list", {"items": ["Blood pressure tablets", "Milk"]})
+    assert r["added"] == [] and len(r["already_on_list"]) == 2
+    # tasks: a reworded repeat of the same chore is not a new task (and no new Slack message)
+    tools.call("assign_task", {"title": "Pick up milk, paneer and BP tablet from FreshMart", "assignee": "Rohan"})
+    n = len(db.q("SELECT id FROM notifications"))
+    again = tools.call("assign_task", {"title": "Pick up milk, paneer, and blood pressure tablets on the way home", "assignee": "Rohan"})
+    assert again["status"] == "already_assigned" and len(db.q("SELECT id FROM notifications")) == n
+    # family channel: only when the user asked to message the family
+    db.remember("last_user_text", "my number is nine six three")
+    assert "error" in tools.call("send_family_update", {"message": "My correct number is 963."})
+    db.remember("last_user_text", "tell the family dinner is at 8")
+    assert tools.call("send_family_update", {"message": "Dinner is at 8."})["status"] == "sent"
+    assert tools.call("send_family_update", {"message": "Dinner is at 8."})["status"] == "already_sent"
+    # live call invites: family members only, no repeats
+    assert "error" in tools.call("call_family_member", {"member": "963299527"})
+    assert "error" in tools.call("call_family_member", {"member": "Matthew"})
+    assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "invited"
+    assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "already_invited"

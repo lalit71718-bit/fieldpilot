@@ -88,6 +88,33 @@ def _household() -> dict:
     return {r["key"]: r["value"] for r in db.q("SELECT * FROM household")}
 
 
+# ---------------------------------------------------------------- de-duplication helpers
+
+_SYNONYMS = [("blood pressure", "bp"), ("tablets", "tablet"), ("medicines", "medicine"),
+             ("tomatoes", "tomato"), ("potatoes", "potato")]
+_FILLER = {"the", "a", "an", "some", "of", "for", "dadi's", "dadis", "dadi", "her", "his",
+           "my", "our", "from", "on", "way", "home", "to", "up", "pick", "and", "freshmart"}
+
+
+def _canon(text: str) -> set[str]:
+    t = re.sub(r"'s\b", "", text.lower())                 # "dadi's" -> "dadi"
+    t = " " + re.sub(r"[^a-z0-9 ]", " ", t) + " "
+    for a, b in _SYNONYMS:
+        t = t.replace(f" {a} ", f" {b} ")
+    words = [w for w in t.split() if w not in _FILLER]
+    return {w.rstrip("s") if len(w) > 3 else w for w in words}
+
+
+def _similar(a: str, b: str, threshold: float = 0.6) -> bool:
+    import difflib
+    ca, cb = _canon(a), _canon(b)
+    if ca and cb and ca == cb:
+        return True
+    if ca and cb and len(ca & cb) / len(ca | cb) >= threshold:
+        return True
+    return difflib.SequenceMatcher(None, " ".join(sorted(ca)), " ".join(sorted(cb))).ratio() >= 0.85
+
+
 # ---------------------------------------------------------------- Before: context
 
 def get_today() -> dict:
@@ -360,18 +387,22 @@ def add_to_shopping_list(items: list[str], note: str = "") -> dict:
     """Add items to the family shopping list (duplicates are skipped)."""
     if isinstance(items, str):
         items = [i.strip() for i in re.split(r",| and ", items) if i.strip()]
-    have = {s["item"].lower() for s in db.q("SELECT item FROM shopping WHERE status='needed'")}
-    added = []
+    have = [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")]
+    added, skipped = [], []
     for it in items:
         it = it.strip().rstrip(".")
-        if it and it.lower() not in have:
-            db.run("INSERT INTO shopping (item,note,status,created_at) VALUES (?,?,?,?)",
-                   (it[:1].upper() + it[1:], note, "needed", db.iso(db.now())))
-            have.add(it.lower())
-            added.append(it)
+        if not it:
+            continue
+        if any(_similar(it, h, 0.99) for h in have):  # "BP tablet" == "blood pressure tablets"
+            skipped.append(it)
+            continue
+        db.run("INSERT INTO shopping (item,note,status,created_at) VALUES (?,?,?,?)",
+               (it[:1].upper() + it[1:], note, "needed", db.iso(db.now())))
+        have.append(it)
+        added.append(it)
     if added:
         db.log("shopping", "Shopping list updated", ", ".join(added))
-    return {"status": "updated", "added": added,
+    return {"status": "updated", "added": added, "already_on_list": skipped,
             "list": [s["item"] for s in db.q("SELECT item FROM shopping WHERE status='needed'")],
             "store": _household().get("grocery_store")}
 
@@ -387,10 +418,13 @@ def assign_task(title: str, assignee: str, due_at: str = "") -> dict:
         due = _parse_when(due_at)
         if isinstance(due, str):
             return {"error": due}
-    dup = db.one("SELECT id FROM tasks WHERE lower(title)=lower(?) AND assignee=? AND status='open'",
-                 (title, m["id"]))
+    dup = next((t for t in db.q("SELECT * FROM tasks WHERE assignee=? AND status='open'", (m["id"],))
+                if _similar(title, t["title"])), None)
     if dup:
-        return {"status": "already_assigned", "task_id": dup["id"]}
+        if due and dup["due_at"] != db.iso(due):
+            db.run("UPDATE tasks SET due_at=? WHERE id=?", (db.iso(due), dup["id"]))
+        return {"status": "already_assigned", "task": dup["title"],
+                "note": "This task already exists; nothing new was sent."}
     db.run("INSERT INTO tasks (title,assignee,due_at,status,created_at) VALUES (?,?,?,?,?)",
            (title, m["id"], db.iso(due) if due else None, "open", db.iso(db.now())))
     when = f" by {_spoken_time(due)}" if due else ""
@@ -503,9 +537,20 @@ def _send_family(message: str, urgent: bool = False) -> str:
 
 def send_family_update(message: str, urgent: bool = False) -> dict:
     """Post an update to the family channel. Urgent alerts need the user's yes."""
+    said = db.recall("last_user_text").lower()
+    asked = not said or any(w in said for w in (
+        "family", "tell", "message", "send", "update", "inform", "let them know", "notify",
+        "announce", "everyone", "whatsapp", "slack", "group"))
+    if not asked:
+        return {"error": "The user did not ask to message the family. Don't post your own "
+                         "notes; just answer the user."}
     if urgent:
         return _pending("urgent_alert", {"message": message},
                         f"Send an urgent alert to the whole family: {message}")
+    recent = db.one("SELECT id FROM notifications WHERE message=? AND created_at>=?",
+                    (":house: " + message, db.iso(db.now() - timedelta(minutes=5))))
+    if recent:
+        return {"status": "already_sent"}
     sent = _send_family(message)
     db.log("notify", "Family update sent", message)
     return {"status": "sent", "delivery": sent}
@@ -547,7 +592,16 @@ def daily_summary() -> dict:
 def call_family_member(member: str, reason: str = "") -> dict:
     """Invite a family member into this live voice call (Agora RTC) with a join link."""
     m = _member(member)
-    name = m["name"] if m else (member or "family")
+    if not m:
+        names = ", ".join(x["name"] for x in db.q("SELECT name FROM members WHERE id!='anika'"))
+        return {"error": f"Only family members can be invited ({names}). Phone numbers and "
+                         "other people aren't supported."}
+    name = m["name"]
+    last = db.recall("invite_" + m["id"])
+    if last and datetime.fromisoformat(last) > db.now() - timedelta(minutes=3):
+        return {"status": "already_invited", "who": name,
+                "say": f"{name} was already invited a moment ago; the link is in the family channel."}
+    db.remember("invite_" + m["id"], db.iso(db.now()))
     base = config.PUBLIC_BASE_URL or "http://localhost:8000"
     link = f"{base}/expert.html"
     text = (f":telephone_receiver: @{name}, Anika wants you on a live call"
@@ -633,7 +687,8 @@ TOOLS = {
     "daily_summary": (daily_summary, _s(
         "Wrap-up: send the family what got done, what's open, bookings and reminders.")),
     "call_family_member": (call_family_member, _s(
-        "Bring a family member into this live voice call (sends a join link).",
+        "Bring a family member (Rohan, Kabir or Dadi) into this live voice call via a join "
+        "link. Not for phone numbers or other people.",
         {"member": STR, "reason": STR}, ["member"])),
 }
 
