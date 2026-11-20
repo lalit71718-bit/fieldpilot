@@ -25,7 +25,16 @@ AGORA_CUSTOMER_SECRET = env("AGORA_CUSTOMER_SECRET")
 AGORA_CHANNEL = env("AGORA_CHANNEL", "fieldpilot-demo")
 AGORA_ASR_LANGUAGE = env("AGORA_ASR_LANGUAGE", "en-US")
 
-PUBLIC_BASE_URL = env("PUBLIC_BASE_URL").rstrip("/")
+def _public_url(raw: str) -> str:
+    url = raw.strip().strip("'\"").strip().rstrip("/")
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    if url and not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
+
+PUBLIC_BASE_URL = _public_url(env("PUBLIC_BASE_URL"))
 BRAIN_API_KEY = env("BRAIN_API_KEY", "change-me")
 
 MURF_API_KEY = env("MURF_API_KEY")

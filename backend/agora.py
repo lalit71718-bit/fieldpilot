@@ -95,7 +95,13 @@ def missing_settings() -> list[str]:
             "PUBLIC_BASE_URL": config.PUBLIC_BASE_URL, "LLM_API_KEY": config.LLM_API_KEY}
     if not config.AGORA_TTS_PARAMS_JSON:
         need["MURF_API_KEY"] = config.MURF_API_KEY
-    return [k for k, v in need.items() if not v]
+    missing = [k for k, v in need.items() if not v]
+    host = config.PUBLIC_BASE_URL.split("://", 1)[-1].split("/")[0]
+    if config.PUBLIC_BASE_URL and ("." not in host or "xxxx" in host or host.startswith(
+            ("localhost", "127.0.0.1"))):
+        missing.append("PUBLIC_BASE_URL (must be your cloudflared https address, not "
+                       f"'{config.PUBLIC_BASE_URL}')")
+    return missing
 
 
 async def start_agent(channel: str | None = None) -> dict:
