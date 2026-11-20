@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const hhmm = (ts) => (ts || "").slice(11, 16);
 
-let rtc = null, mic = null, live = false, cfg = null;
+let rtc = null, mic = null, live = false, cfg = null, busy = false;
 const textHistory = [];
 
 // Minutes of manual work each automated action replaces (shown as "paperwork saved").
@@ -41,7 +41,7 @@ async function startVoice() {
   setChip("chip-rtc", "Voice: live", true);
   live = true; $("mic").classList.add("live");
   setStatus("Starting FieldPilot agent...", "");
-  const res = await api("/api/agent/start", { method: "POST" });
+  const res = await api("/api/agent/start", { method: "POST", body: JSON.stringify({ uid: cfg.uid }) });
   if (!res.ok) { setStatus("Agent failed to start", res.error?.slice(0, 160) || ""); return; }
   setChip("chip-agent", "Agent: joining", true);
   setStatus("Listening - just talk", 'Try: "What\'s my first job?"');
@@ -68,9 +68,22 @@ function watchAgentVoice(track) {
 }
 
 $("mic").onclick = async () => {
+  if (busy) return;  // ignore double clicks while connecting
+  busy = true;
   try { live ? await stopVoice() : await startVoice(); }
-  catch (e) { setStatus("Voice error", e.message); console.error(e); }
+  catch (e) {
+    setStatus("Voice error", e.message); console.error(e);
+    // clean up a half-open session so the next click starts fresh
+    try { if (mic) { mic.close(); mic = null; } if (rtc) { await rtc.leave(); rtc = null; } } catch {}
+    live = false; $("mic").classList.remove("live", "speaking");
+  } finally { busy = false; }
 };
+
+// Leave the channel and stop the agent when the tab closes or reloads.
+window.addEventListener("pagehide", () => {
+  if (live) navigator.sendBeacon("/api/agent/stop");
+  if (rtc) rtc.leave();
+});
 
 // ------------------------------------------------------------------ text backup mode
 $("text-form").onsubmit = async (ev) => {

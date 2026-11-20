@@ -10,6 +10,7 @@ with AGORA_TTS_PARAMS_JSON - no code change needed."""
 import base64
 import json
 import os
+import random
 import time
 import uuid
 
@@ -61,14 +62,16 @@ def _merge(base: dict, extra: dict) -> dict:
     return base
 
 
-def join_body(channel: str) -> dict:
+def join_body(channel: str, user_uid: int = USER_UID) -> dict:
+    # Fresh agent uid each start, so a leftover agent from an earlier run never conflicts.
+    agent_uid = random.randint(100_000, 999_999)
     body = {
         "name": f"fieldpilot-{uuid.uuid4().hex[:8]}",
         "properties": {
             "channel": channel,
-            "token": rtc_token(AGENT_UID, channel),
-            "agent_rtc_uid": str(AGENT_UID),
-            "remote_rtc_uids": [str(USER_UID)],
+            "token": rtc_token(agent_uid, channel),
+            "agent_rtc_uid": str(agent_uid),
+            "remote_rtc_uids": [str(user_uid)],
             "idle_timeout": 180,
             "asr": {"language": config.AGORA_ASR_LANGUAGE},
             "llm": {
@@ -104,7 +107,7 @@ def missing_settings() -> list[str]:
     return missing
 
 
-async def start_agent(channel: str | None = None) -> dict:
+async def start_agent(channel: str | None = None, user_uid: int = USER_UID) -> dict:
     channel = channel or config.AGORA_CHANNEL
     missing = missing_settings()
     if missing:
@@ -113,7 +116,7 @@ async def start_agent(channel: str | None = None) -> dict:
         await stop_agent()
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(),
-                         json=join_body(channel))
+                         json=join_body(channel, user_uid))
     if r.status_code >= 300:
         db.log("error", "Agent start failed", f"{r.status_code} {r.text[:300]}")
         return {"ok": False, "status": r.status_code, "error": r.text}

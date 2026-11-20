@@ -9,6 +9,7 @@
   POST /api/reset          reseed demo data
   GET  /                   web app
 """
+import random
 import time
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -47,14 +48,17 @@ async def chat_completions(request: Request, authorization: str | None = Header(
 
 @app.get("/api/config")
 def api_config():
+    # Fresh uid per browser session, so a stale tab or earlier attempt never causes UID_CONFLICT.
+    uid = random.randint(10_000, 99_999)
     return {"app_id": config.AGORA_APP_ID, "channel": config.AGORA_CHANNEL,
-            "uid": agora.USER_UID, "token": agora.rtc_token(agora.USER_UID) or None,
+            "uid": uid, "token": agora.rtc_token(uid) or None,
             "missing": agora.missing_settings(), "llm_model": config.LLM_MODEL}
 
 
 @app.post("/api/agent/start")
-async def agent_start():
-    return await agora.start_agent()
+async def agent_start(request: Request):
+    body = await request.json() if await request.body() else {}
+    return await agora.start_agent(user_uid=int(body.get("uid") or agora.USER_UID))
 
 
 @app.post("/api/agent/stop")
