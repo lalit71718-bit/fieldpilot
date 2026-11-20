@@ -352,3 +352,32 @@ def test_guards_from_live_test():
     assert "error" in tools.call("call_family_member", {"member": "Matthew"})
     assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "invited"
     assert tools.call("call_family_member", {"member": "Rohan"})["status"] == "already_invited"
+
+
+def test_tell_me_is_not_tell_the_family_and_memory():
+    db.remember("last_user_text", "Then can you please tell me what is the number of Rohan?")
+    assert "error" in tools.call("send_family_update", {"message": "Rohan's number is 963"})
+    for said in ["tell the family dinner is at 8", "let everyone know I'm late",
+                 "send the family an update", "message Rohan that the AC is fixed"]:
+        db.remember("last_user_text", said)
+        assert "error" not in tools.call("send_family_update", {"message": said})
+    assert tools.call("remember_fact", {"fact": "Anika's birthday is 22 August 2005"})["status"] == "remembered"
+    assert tools.call("remember_fact", {"fact": "Anika's birthday is 22 August 2005."})["status"] == "already_remembered"
+    assert "birthday is 22 August 2005" in brain.live_context()
+
+
+def test_near_miss_tool_name_is_corrected(monkeypatch):
+    class Typo(FakeLLM):
+        async def create(self, **kw):
+            self.calls.append(kw["messages"])
+            done = any(m.get("role") == "tool" for m in kw["messages"])
+            async def gen():
+                if not done:
+                    yield _chunk(tool=("call_family_model", {"member": "Rohan"}))
+                else:
+                    yield _chunk("Rohan is invited.")
+            return gen()
+    monkeypatch.setattr(brain, "_targets", lambda: [(Typo(), "m")])
+    r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "get Rohan"}]})
+    assert r.json()["reply"].endswith("Rohan is invited.")
+    assert db.q("SELECT * FROM activity WHERE kind='call'")

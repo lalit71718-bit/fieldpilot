@@ -538,9 +538,11 @@ def _send_family(message: str, urgent: bool = False) -> str:
 def send_family_update(message: str, urgent: bool = False) -> dict:
     """Post an update to the family channel. Urgent alerts need the user's yes."""
     said = db.recall("last_user_text").lower()
-    asked = not said or any(w in said for w in (
-        "family", "tell", "message", "send", "update", "inform", "let them know", "notify",
-        "announce", "everyone", "whatsapp", "slack", "group"))
+    asked = not said or bool(re.search(
+        r"\b(tell|message|text|inform|notify|update|ping|let)\s+(the\s+)?"
+        r"(family|everyone|everybody|them|rohan|kabir|dadi|grandma|all)\b"
+        r"|\b(send|post)\b.*\b(family|everyone|update|message|group|slack|whatsapp)\b"
+        r"|\bfamily (update|group|channel|chat)\b|\bannounce\b", said))
     if not asked:
         return {"error": "The user did not ask to message the family. Don't post your own "
                          "notes; just answer the user."}
@@ -613,6 +615,23 @@ def call_family_member(member: str, reason: str = "") -> dict:
             "say": f"Tell the user {name} has been invited and can join this call from their phone."}
 
 
+def remember_fact(fact: str) -> dict:
+    """Remember something the user asked you to keep (birthdays, preferences, numbers)."""
+    fact = fact.strip().rstrip(".")
+    if not fact:
+        return {"error": "Nothing to remember."}
+    facts = recall_facts()
+    if any(_similar(fact, f, 0.8) for f in facts):
+        return {"status": "already_remembered"}
+    db.run("INSERT INTO memory VALUES (?,?)", (f"fact_{len(facts) + 1:03d}", fact))
+    db.log("memory", "Remembered", fact)
+    return {"status": "remembered", "fact": fact}
+
+
+def recall_facts() -> list[str]:
+    return [r["value"] for r in db.q("SELECT value FROM memory WHERE key LIKE 'fact_%' ORDER BY key")]
+
+
 def shift_briefing() -> str:
     """Spoken greeting when the agent joins: the day at a glance."""
     now = db.now()
@@ -681,6 +700,9 @@ TOOLS = {
     "cancel_reminder": (cancel_reminder, _s(
         "Cancel reminders or alarms: 'all', a time like '10:50 PM', or words from the text.",
         {"which": STR}, ["which"])),
+    "remember_fact": (remember_fact, _s(
+        "Save something the user explicitly asks you to remember (a birthday, a preference, a "
+        "phone number). Saved facts appear in LIVE CONTEXT.", {"fact": STR}, ["fact"])),
     "send_family_update": (send_family_update, _s(
         "Post a message to the family channel. urgent=true needs the user's yes.",
         {"message": STR, "urgent": {"type": "boolean"}}, ["message"])),

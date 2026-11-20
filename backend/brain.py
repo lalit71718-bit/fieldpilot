@@ -9,6 +9,7 @@ Agora Conversational AI sends every user turn here in OpenAI Chat Completions fo
 While tools run we immediately stream a short filler ("One sec, checking stock.") so the
 technician never hears dead air."""
 import asyncio
+import difflib
 import json
 from datetime import datetime
 import re
@@ -59,8 +60,9 @@ ACTIONS
   just says "cancel the 10:50 alarm". When a reminder is due, the dashboard shows a pop-up
   with a chime, you say it out loud in the call, and it is posted to the family channel.
   There is no separate app, swipe or delete button. Never invent screens or features.
-- You CANNOT: book hotels or travel, make phone calls, save or dial phone numbers, cancel a
-  sent message or invitation, order online, or keep free-form notes. Say so in one sentence
+- You CANNOT: book hotels or travel, make phone calls or dial numbers, cancel a
+  sent message or invitation, or order online. To remember something (a birthday, a
+  preference, a number), use remember_fact; only then may you say it is saved. Say so in one sentence
   and offer a real alternative (a reminder, a task or a shopping item). Never say you "noted" or "saved" something unless a tool did it.
 - send_family_update is ONLY for when the user asks you to tell / message the family. Never
   use it for your own notes, apologies or to record what the user said.
@@ -179,6 +181,13 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
                         extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
                         if extra:
                             slot["extra"] = extra
+                for c in rnd.calls.values():  # "call_family_model" -> "call_family_member"
+                    if c["name"] not in tools.TOOLS:
+                        near = difflib.get_close_matches(c["name"], list(tools.TOOLS), n=1,
+                                                         cutoff=0.75)
+                        if near:
+                            db.log("llm", f"Corrected tool name {c['name']} -> {near[0]}")
+                            c["name"] = near[0]
                 bad = [c["name"] for c in rnd.calls.values() if c["name"] not in tools.TOOLS]
                 if bad and not rnd.content:
                     raise ValueError(f"invented tool {bad}")
@@ -215,6 +224,9 @@ def live_context() -> str:
                                    for m in db.q("SELECT * FROM members")) + ".",
              "Preferences: " + "; ".join(f"{h['key']}: {h['value']}"
                                         for h in db.q("SELECT * FROM household")) + "."]
+    facts = tools.recall_facts()
+    if facts:
+        lines.append("Remembered for the family: " + "; ".join(facts) + ".")
     active = db.recall("active_appliance")
     if active:
         a = db.one("SELECT name, model FROM appliances WHERE id=?", (active,))
@@ -272,6 +284,7 @@ FILLERS = {
     "assign_task": "Sending that over.",
     "complete_task": "Ticking that off.",
     "set_reminder": "Setting the reminder.",
+    "remember_fact": "I'll remember that.",
     "cancel_reminder": "Cancelling that.",
     "send_family_update": "Messaging the family.",
     "daily_summary": "Sending the family a summary.",
