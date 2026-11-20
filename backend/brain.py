@@ -106,7 +106,13 @@ async def _stream_round(messages, rnd: _Round) -> AsyncIterator[str]:
                         rnd.content += d.content
                         yield d.content
                     for tc in d.tool_calls or []:
-                        slot = rnd.calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                        # Some providers (e.g. Gemini) omit `index`: a new id means a new call.
+                        key = tc.index
+                        if key is None:
+                            ids = [c["id"] for c in rnd.calls.values()]
+                            key = (len(rnd.calls) if (tc.id and tc.id not in ids) or not rnd.calls
+                                   else max(rnd.calls))
+                        slot = rnd.calls.setdefault(key, {"id": "", "name": "", "args": ""})
                         slot["id"] = tc.id or slot["id"]
                         if tc.function:
                             slot["name"] += tc.function.name or ""

@@ -158,3 +158,25 @@ def test_error_turns_are_dropped_from_history():
         {"role": "assistant", "content": "Sorry, I lost connection to our systems for a moment."},
         {"role": "user", "content": "try again"}])
     assert [m["content"] for m in msgs[2:]] == ["first job?", "try again"]
+
+
+def test_tool_calls_without_index(monkeypatch):
+    """Gemini-style stream: two complete tool calls, no index field."""
+    class NoIndex(FakeLLM):
+        async def create(self, **kw):
+            self.calls.append(kw["messages"])
+            done = any(m.get("role") == "tool" for m in kw["messages"])
+            async def gen():
+                if not done:
+                    yield NS(choices=[NS(delta=NS(content=None, tool_calls=[
+                        NS(index=None, id="a", function=NS(name="get_my_tickets", arguments="{}")),
+                        NS(index=None, id="b", function=NS(name="check_inventory",
+                                                           arguments='{"part": "CAP-45"}'))]))])
+                else:
+                    yield _chunk("Two tools done.")
+            return gen()
+    fake = NoIndex()
+    monkeypatch.setattr(brain, "_targets", lambda: [(fake, "gemini")])
+    r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
+    assert r.json()["reply"].endswith("Two tools done.")
+    assert len([m for m in fake.calls[1] if m.get("role") == "tool"]) == 2
