@@ -2,6 +2,8 @@
 
 > **Build with Agora, Bengaluru 2026** · Track **PS-1: Real-Time Conversational AI Meets Agentic Workflows** (AI Family Assistant)
 >
+> 🌐 **Live:** [fieldpilot-gu0j.onrender.com](https://fieldpilot-gu0j.onrender.com) · 🎙 **App:** [fieldpilot-gu0j.onrender.com/app.html](https://fieldpilot-gu0j.onrender.com/app.html) · 📞 **Join a family call:** [/expert.html](https://fieldpilot-gu0j.onrender.com/expert.html)
+>
 > 🎥 **Demo video:** [add link] · 📊 **Pitch deck:** [add link] · 👥 **Team SpeakX:** Lalit Kumar Singh
 
 Anika just **talks**. HomePilot knows the family's calendar, chores and preferences. When the
@@ -10,6 +12,17 @@ safe check from the manual, finds a technician slot that **doesn't clash with Da
 books it **only after she says yes**, puts it on the family calendar with a reminder, adds groceries
 to the shopping list, asks Rohan to pick them up, reminds Dadi about her BP tablet, ticks off
 Kabir's chore and sends everyone an update. It can even bring Rohan into the live voice call.
+
+## Try it live
+
+| Page | Link | What you'll see |
+|---|---|---|
+| Website | [https://fieldpilot-gu0j.onrender.com](https://fieldpilot-gu0j.onrender.com) | Call replay with waveform and agent trace, the “A day in the Sharma home” carousel, a live text console wired to the real agent, and the guardrails demo |
+| Voice app | [https://fieldpilot-gu0j.onrender.com/app.html](https://fieldpilot-gu0j.onrender.com/app.html) | Tap the mic and talk: live family dashboard with calendar, chores, shopping list, reminders and the family channel |
+| Family call | [https://fieldpilot-gu0j.onrender.com/expert.html](https://fieldpilot-gu0j.onrender.com/expert.html) | What a family member opens from Slack to join the live call |
+| Health check | [https://fieldpilot-gu0j.onrender.com/api/diag](https://fieldpilot-gu0j.onrender.com/api/diag) | Models, voice settings and public URL status |
+
+Hosted on Render's free plan: the first visit after a quiet period takes about 50 seconds to wake up. Click **Reset demo** in the app to start from the demo household.
 
 ![HomePilot website](docs/website.png)
 
@@ -97,6 +110,8 @@ Without voice keys, the **text box** still runs the full assistant.
 | `BRAIN_API_KEY` | Any password you choose |
 
 ### Deploy online (Render, free)
+Live deployment: **[https://fieldpilot-gu0j.onrender.com](https://fieldpilot-gu0j.onrender.com)**. It redeploys automatically on every push to `main`.
+
 1. render.com → **New + → Blueprint** → pick this repo (it reads `render.yaml`).
 2. Paste the secret values it asks for → **Apply**.
 3. Open `https://<your-service>.onrender.com`. The public address is detected automatically.

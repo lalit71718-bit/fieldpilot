@@ -12,7 +12,7 @@ cd "C:\Users\D E L L\fieldpilot"
 git pull
 python run_demo.py
 ```
-It opens the website; click **Open the app** for the voice dashboard (`/app.html`). Or use the Render link (open it a minute early so it wakes up).
+It opens the website; click **Open the app** for the voice dashboard (`/app.html`). Or use the Render deployment: **https://fieldpilot-gu0j.onrender.com** (app: https://fieldpilot-gu0j.onrender.com/app.html). Open it 5 minutes early so it wakes up.
 
 ## Check (1 minute)
 - Open `/api/diag`: `missing_for_voice` is `[]`, at least one model under `llm` is `"ok": true`, `tunnel` is `"ok": true`.
