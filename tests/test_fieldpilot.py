@@ -180,3 +180,10 @@ def test_tool_calls_without_index(monkeypatch):
     r = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]})
     assert r.json()["reply"].endswith("Two tools done.")
     assert len([m for m in fake.calls[1] if m.get("role") == "tool"]) == 2
+
+
+def test_spoken_time_and_speech_cleanup():
+    from datetime import datetime
+    assert tools._spoken_time(datetime(2026, 11, 20, 15, 5)) == "Friday at 3:05 PM"
+    assert tools._spoken_time(datetime(2026, 11, 20, 10, 0)) == "Friday at 10 AM"
+    assert brain.speakable("rated 45/5 uF") == "rated 45 by 5 microfarad"

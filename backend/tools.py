@@ -14,6 +14,12 @@ from datetime import datetime, timedelta
 from . import config, db, integrations, rag
 
 
+def _spoken_time(dt: datetime) -> str:
+    """'Friday at 3:25 PM' (portable: '%-I' crashes on Windows)."""
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    return f"{dt.strftime('%A')} at {hour}:{dt.strftime('%M %p')}".replace(":00 ", " ")
+
+
 def _tech() -> dict:
     return db.one("SELECT * FROM technicians WHERE id=?", (config.DEFAULT_TECHNICIAN_ID,)) or {}
 
@@ -130,7 +136,7 @@ def request_part_order(ticket_id: str, sku: str, warehouse: str, qty: int = 1) -
     total = p["unit_price"] * qty
     summary = (f"Order {qty} {p['name'].split(' ' + p['name'].split()[-2])[0].lower()} "
                f"from {s['warehouse']}, {total:,} rupees, arriving "
-               f"{eta.strftime('%A at %-I:%M %p').replace(':00', '')}.")
+               f"{_spoken_time(eta)}.")
     return _pending("order_part", {"ticket_id": t["id"], "sku": p["sku"],
                                    "warehouse": s["warehouse"], "qty": qty,
                                    "total": total, "eta": db.iso(eta.replace(second=0))},

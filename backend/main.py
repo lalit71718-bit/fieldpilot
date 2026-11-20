@@ -33,7 +33,6 @@ def _check_key(authorization: str | None) -> None:
 @app.post("/chat/completions")
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str | None = Header(None)):
-    db.log("system", "Agora called the brain", request.headers.get("user-agent", "")[:60])
     _check_key(authorization)
     body = await request.json()
     messages = body.get("messages", [])
