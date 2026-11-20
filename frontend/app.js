@@ -155,7 +155,7 @@ function render(s) {
   $("report").classList.toggle("muted", !r);
 
   $("activity").innerHTML = s.activity.filter((a) => !["user", "agent", "tool"].includes(a.kind)).map((a) =>
-    `<div class="ev"><span class="t">${hhmm(a.ts)}</span><span class="tag ${a.kind}">${esc(a.kind)}</span><span><b>${esc(a.title)}</b> <span class="d">${esc(a.detail)}</span></span></div>`).join("")
+    `<div class="ev"><span class="t">${hhmm(a.ts)}</span><span class="tag ${a.kind}">${esc(a.kind)}</span><span title="${esc(a.detail)}"><b>${esc(a.title)}</b> <span class="d">${esc(a.detail)}</span></span></div>`).join("")
     || '<div class="muted">Actions the agent takes will stream here.</div>';
 
   const saved = s.activity.reduce((m, a) => m + (MINUTES[a.kind] || 0), 0);

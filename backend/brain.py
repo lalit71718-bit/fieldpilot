@@ -161,6 +161,10 @@ def live_context() -> str:
     return "\n".join(lines)
 
 
+ERROR_MARKERS = ("hit a problem", "lost connection", "connectivity", "glitch", "rate limit",
+                 "too many steps", "language model key")
+
+
 def _text(content) -> str:
     """Agora/OpenAI content can be a string or a list of parts; keep only the text."""
     if isinstance(content, str):
@@ -175,7 +179,10 @@ def build_messages(incoming: list[dict]) -> list[dict]:
     # turn_id) that strict providers like Groq reject.
     convo = [{"role": m["role"], "content": _text(m.get("content"))}
              for m in incoming if m.get("role") in ("user", "assistant")]
-    convo = [m for m in convo if m["content"]][-MAX_HISTORY:]
+    # Drop our own error/apology turns so one failure doesn't derail the rest of the call.
+    convo = [m for m in convo if m["content"] and not (
+        m["role"] == "assistant" and any(k in m["content"].lower() for k in ERROR_MARKERS))]
+    convo = convo[-MAX_HISTORY:]
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": "LIVE CONTEXT (from enterprise systems):\n"
                                           + live_context()}] + convo

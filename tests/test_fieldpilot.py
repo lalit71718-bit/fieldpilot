@@ -150,3 +150,11 @@ def test_falls_back_when_model_invents_tool(monkeypatch):
     c = TestClient(app)
     r = c.post("/api/chat", json={"messages": [{"role": "user", "content": "stock?"}]})
     assert r.json()["reply"].endswith("Shall I order one?")
+
+
+def test_error_turns_are_dropped_from_history():
+    msgs = brain.build_messages([
+        {"role": "user", "content": "first job?"},
+        {"role": "assistant", "content": "Sorry, I lost connection to our systems for a moment."},
+        {"role": "user", "content": "try again"}])
+    assert [m["content"] for m in msgs[2:]] == ["first job?", "try again"]
