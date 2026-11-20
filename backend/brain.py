@@ -126,9 +126,21 @@ def live_context() -> str:
     return "\n".join(lines)
 
 
+def _text(content) -> str:
+    """Agora/OpenAI content can be a string or a list of parts; keep only the text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict)).strip()
+    return ""
+
+
 def build_messages(incoming: list[dict]) -> list[dict]:
-    convo = [m for m in incoming if m.get("role") in ("user", "assistant") and m.get("content")]
-    convo = convo[-MAX_HISTORY:]
+    # Rebuild each message with only role + text: Agora adds extra fields (e.g. "metadata",
+    # turn_id) that strict providers like Groq reject.
+    convo = [{"role": m["role"], "content": _text(m.get("content"))}
+             for m in incoming if m.get("role") in ("user", "assistant")]
+    convo = [m for m in convo if m["content"]][-MAX_HISTORY:]
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": "LIVE CONTEXT (from enterprise systems):\n"
                                           + live_context()}] + convo
@@ -153,8 +165,9 @@ async def run_turn(incoming: list[dict]) -> AsyncIterator[str]:
     if not config.LLM_API_KEY:
         yield "My language model key is not configured yet. Please set LLM_API_KEY."
         return
-    user_text = next((m["content"] for m in reversed(incoming) if m.get("role") == "user"), "")
-    if isinstance(user_text, str) and user_text:
+    user_text = next((_text(m.get("content")) for m in reversed(incoming)
+                      if m.get("role") == "user"), "")
+    if user_text:
         db.log("user", "Technician", user_text)
 
     messages = build_messages(incoming)

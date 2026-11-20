@@ -115,3 +115,13 @@ def test_state_and_text_chat(monkeypatch):
     s = c.get("/api/state").json()
     assert {"tickets", "stock", "orders", "pending", "activity"} <= s.keys()
     assert c.get("/").status_code == 200
+
+
+def test_agora_extra_fields_are_stripped():
+    msgs = brain.build_messages([
+        {"role": "user", "content": "hi", "turn_id": 1, "timestamp": 2},
+        {"role": "assistant", "content": "Hello", "metadata": {"interrupted": False}},
+        {"role": "user", "content": [{"type": "text", "text": "first job?"}]}])
+    convo = msgs[2:]
+    assert convo == [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello"},
+                     {"role": "user", "content": "first job?"}]
