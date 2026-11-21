@@ -622,3 +622,21 @@ def test_older_request_stops_when_a_newer_one_arrives(monkeypatch):
 
     old, new = asyncio.run(run())
     assert "".join(new).strip() == "one two three" and "three" not in "".join(old)
+
+
+def test_demo_mode_runs_the_whole_story_without_the_llm(monkeypatch):
+    from backend import config as cfg, demo, store_server
+    monkeypatch.setattr(cfg, "STORE_MCP_URL", "internal")
+    monkeypatch.setattr(cfg, "LLM_API_KEY", "")
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    store_server.reset_store()
+    c = TestClient(app)
+    replies = []
+    for n in range(len(demo.STEPS)):
+        r = c.post("/api/demo/step", json={"step": n}).json()
+        replies.append(r["reply"])
+        assert "problem" not in r["reply"].lower(), (n, r["reply"])
+    print("\n".join(replies))
+    st = c.get("/api/state").json()
+    assert st["bookings"] and st["store_orders"] and st["reminders"] and st["cal_qr"]
+    assert "Booked, BK-" in replies[3] and "placed" in replies[7] and r["done"]

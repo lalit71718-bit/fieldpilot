@@ -75,6 +75,11 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 
 ## Demo script
 
+**No voice or AI quota? Use ▶ Demo mode** (top of `/app.html`): it resets the data and plays the
+whole story below in about two minutes through the **real tools** (booking, calendar, shopping,
+reminder, MCP store order, spending, phone QR, family summary), reading each reply aloud. Only the
+reply wording is scripted, so it works even when the LLM provider is rate-limited.
+
 Open the website at `/` (hero, how it works, features, a live “Try it” box, an interactive safety demo), then **Open the app** (`/app.html`). Click **Reset demo**, then the mic. HomePilot opens with the day's briefing.
 
 | Step | Anika says | What happens on screen |
@@ -130,7 +135,7 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 ## MCP and tests
 ```bash
 mcp dev backend/mcp_server.py      # inspect the 29 household tools in MCP Inspector
-pytest -q                          # 42 tests, no keys needed (the LLM is faked)
+pytest -q                          # 43 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout

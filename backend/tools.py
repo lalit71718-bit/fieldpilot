@@ -327,7 +327,7 @@ def confirm_action(action_id: str, approved: bool) -> dict:
         db.log("booking", f"Booked {bid}: {s['provider']}", a["summary"])
         db.log("calendar", "Added to family calendar", f"{app['name']} repair {_spoken_time(start)}")
         link = calendar_links(f"{app['name']} repair: {s['provider']}", s["slot_at"])["google"]
-        _send_family(f":calendar: {app['name']} repair booked ({bid}) {_spoken_time(start)}. "
+        _send_family(f"{app['name']} repair booked ({bid}) {_spoken_time(start)}. "
                      f"Add it to your Google Calendar: {link}")
         result = {"status": "done", "booking_id": bid, "when": _spoken_time(start),
                   "also_done": "added to the family calendar with a reminder 30 minutes before, "
@@ -474,7 +474,7 @@ def calendar_on_phone() -> dict:
     dashboard that opens a page with one-tap 'Add to Google Calendar' / phone calendar buttons."""
     db.remember("show_cal_qr", db.iso(db.now()))
     link = f"{config.PUBLIC_BASE_URL or ''}/cal.html"
-    _send_family(f":iphone: Put the HomePilot family calendar and alarms on your phone: {link}")
+    _send_family(f"Put the HomePilot family calendar and alarms on your phone: {link}")
     db.log("calendar", "Calendar QR shown", "Scan to add events and alarms to the phone")
     return {"status": "qr_shown", "say": (
         "A QR code is now on the dashboard. Scan it with your phone camera and tap Add for each "

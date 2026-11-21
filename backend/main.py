@@ -178,6 +178,14 @@ def reset():
     return {"ok": True}
 
 
+@app.post("/api/demo/step")
+async def demo_step(request: Request):
+    """Demo mode: run one scripted step of the family story through the real tools."""
+    from . import demo
+    n = int((await request.json()).get("step", 0))
+    return await asyncio.to_thread(demo.run_step, n)
+
+
 @app.get("/api/diag")
 async def diag():
     """One-page health check. Shows no secrets, only whether each one is set."""

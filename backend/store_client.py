@@ -29,9 +29,9 @@ def describe() -> str:
     return t if isinstance(t, str) else "in-process demo store"
 
 
-async def _call_async(tool: str, args: dict) -> dict:
+async def _call_async(tool: str, args: dict, target=None) -> dict:
     from mcp.client.client import Client
-    async with Client(_target(), read_timeout_seconds=15) as client:
+    async with Client(target or _target(), read_timeout_seconds=15) as client:
         result = await client.call_tool(tool, args)
     data = getattr(result, "structured_content", None) or getattr(result, "structuredContent", None)
     if isinstance(data, dict):
@@ -52,4 +52,12 @@ def call(tool: str, args: dict | None = None) -> dict:
     try:
         return asyncio.run(_call_async(tool, args or {}))
     except Exception as e:  # network/protocol errors become a normal tool error
+        if not config.STORE_MCP_URL:
+            # Our own demo store could not be reached over HTTP (wrong port, proxy, cold
+            # start): talk to the same MCP server in-process so the demo keeps working.
+            try:
+                from .store_server import mcp
+                return asyncio.run(_call_async(tool, args or {}, mcp))
+            except Exception:
+                pass
         return {"error": f"Store unavailable ({type(e).__name__}): {str(e)[:160]}"}
