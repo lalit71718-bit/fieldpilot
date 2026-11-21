@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 
 from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI, RateLimitError
 
-from . import config, db, tools
+from . import config, db, languages, tools
 
 MAX_TOOL_ROUNDS = 10
 MAX_HISTORY = 10
@@ -249,7 +249,8 @@ def speakable(text: str) -> str:
 
 def live_context() -> str:
     """Memory injected into every turn: time, family, active issue, what is pending."""
-    lines = [f"Current local time: {db.now().strftime('%A %d %B %Y, %H:%M')} (Asia/Kolkata).",
+    lines = ([languages.instruction()] if languages.current() != "en" else []) + [
+             f"Current local time: {db.now().strftime('%A %d %B %Y, %H:%M')} (Asia/Kolkata).",
              "Family: " + "; ".join(f"{m['name']} ({m['role']}, {m['notes']})"
                                    for m in db.q("SELECT * FROM members")) + ".",
              "Preferences: " + "; ".join(f"{h['key']}: {h['value']}"

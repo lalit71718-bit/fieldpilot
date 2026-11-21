@@ -17,7 +17,7 @@ import uuid
 import httpx
 from agora_token_builder import RtcTokenBuilder
 
-from . import config, db, tools
+from . import config, languages, db, tools
 
 API = "https://api.agora.io/api/conversational-ai-agent/v2/projects"
 USER_UID = 1001
@@ -41,14 +41,15 @@ def _auth_header() -> dict:
             "Content-Type": "application/json"}
 
 
-def murf_tts() -> dict:
-    if config.AGORA_TTS_PARAMS_JSON:
+def murf_tts(lang: str = "en") -> dict:
+    v = languages.voice_settings(lang)
+    if config.AGORA_TTS_PARAMS_JSON and lang == "en":
         params = json.loads(config.AGORA_TTS_PARAMS_JSON)
     else:
         # Field names from docs.agora.io/en/ai/models/tts/murf (REST API sample).
         params = {"api_key": config.MURF_API_KEY,
                   "base_url": "wss://global.api.murf.ai/v1/speech/stream-input",
-                  "voiceId": config.MURF_VOICE_ID, "locale": config.MURF_LOCALE,
+                  "voiceId": v["voice"], "locale": v["locale"],
                   "rate": 0, "pitch": 0, "model": config.MURF_MODEL, "sample_rate": 24000}
     return {"vendor": "murf", "params": params}
 
@@ -62,7 +63,7 @@ def _merge(base: dict, extra: dict) -> dict:
     return base
 
 
-def join_body(channel: str, user_uid: int = USER_UID) -> dict:
+def join_body(channel: str, user_uid: int = USER_UID, lang: str = "en") -> dict:
     # Fresh agent uid each start, so a leftover agent from an earlier run never conflicts.
     agent_uid = random.randint(100_000, 999_999)
     body = {
@@ -73,7 +74,7 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
             "agent_rtc_uid": str(agent_uid),
             "remote_rtc_uids": [str(user_uid)],
             "idle_timeout": 180,
-            "asr": {"language": config.AGORA_ASR_LANGUAGE},
+            "asr": {"language": languages.voice_settings(lang)["asr"]},
             # Wait for the end of the sentence (semantic), and treat "hold on" as a pause,
             # so a slow sentence isn't split into several turns.
             "turn_detection": {"mode": "default", "config": {
@@ -89,11 +90,11 @@ def join_body(channel: str, user_uid: int = USER_UID) -> dict:
                 "style": "openai",
                 "system_messages": [{"role": "system", "content": "HomePilot"}],
                 "max_history": 24,
-                "greeting_message": tools.shift_briefing(),
+                "greeting_message": languages.LANGS[lang]["greet"] or tools.shift_briefing(),
                 "failure_message": "Sorry, I lost connection for a moment.",
                 "params": {"model": config.LLM_MODEL},
             },
-            "tts": murf_tts(),
+            "tts": murf_tts(lang),
         },
     }
     overrides = os.getenv("AGORA_JOIN_OVERRIDES_JSON", "").strip()
@@ -122,9 +123,20 @@ async def start_agent(channel: str | None = None, user_uid: int = USER_UID) -> d
         return {"ok": False, "error": "Missing settings: " + ", ".join(missing)}
     if _state["agent_id"]:
         await stop_agent()
-    body = join_body(channel, user_uid)
+    lang = languages.current()
+    body = join_body(channel, user_uid, lang)
+    note = ""
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(), json=body)
+        if 400 <= r.status_code < 500 and lang != "en" and "turn_detection" not in r.text:
+            # The speech-to-text language or voice was rejected: start in English rather
+            # than fail the demo, and say so on the dashboard.
+            name = languages.LANGS[lang]["name"]
+            db.log("error", f"{name} voice not accepted, started in English", r.text[:300])
+            languages.set_current("en")
+            note = f"{name} isn't available on this voice setup yet, so the call started in English."
+            body = join_body(channel, user_uid, "en")
+            r = await c.post(f"{API}/{config.AGORA_APP_ID}/join", headers=_auth_header(), json=body)
         if r.status_code == 400 and "turn_detection" in r.text:
             # Older engine versions: fall back to default turn detection rather than fail.
             body["properties"].pop("turn_detection", None)
@@ -137,7 +149,8 @@ async def start_agent(channel: str | None = None, user_uid: int = USER_UID) -> d
     data = r.json()
     _state["agent_id"] = data.get("agent_id")
     db.log("system", "Voice agent joined", f"agent {_state['agent_id']} in {channel}")
-    return {"ok": True, "agent_id": _state["agent_id"], "channel": channel}
+    return {"ok": True, "agent_id": _state["agent_id"], "channel": channel,
+            "language": languages.current(), "note": note}
 
 
 async def stop_agent() -> dict:

@@ -244,3 +244,6 @@ tr.new-row td{color:var(--accent)}
 @keyframes pulse{50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.dev.fault .dot{animation:none}}
 .tag.k-iot{color:#d64b2a}
+
+.lang-pick{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.lang-pick select{font:inherit;font-size:13px;letter-spacing:0;text-transform:none;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 8px}

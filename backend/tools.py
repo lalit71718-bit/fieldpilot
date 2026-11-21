@@ -385,14 +385,19 @@ def confirm_action(action_id: str, approved: bool) -> dict:
 
 
 NO_WORDS = {"no", "nope", "nah", "don't", "dont", "cancel", "stop", "wait", "not",
-            "never", "hold", "nahi", "mat"}
+            "never", "hold", "nahi", "mat",
+            # Hindi / Bhojpuri, Kannada, Spanish
+            "नहीं", "नही", "मत", "ना", "नाहीं", "रुको", "रद्द", "ಬೇಡ", "ಇಲ್ಲ", "ಬೇಡಾ", "beda", "illa",
+            "cancela", "cancelar", "nunca", "espera"}
 # Only explicit agreement counts as yes: "No, don't book it" must stay a no.
 YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "haan", "confirm", "proceed",
-             "correct", "absolutely"}
+             "correct", "absolutely",
+             "हाँ", "हां", "हा", "हँ", "जी", "ठीक", "बिल्कुल", "ಹೌದು", "ಸರಿ",
+             "houdu", "sari", "sí", "si", "vale", "claro", "dale"}
 
 
 def _said_no(text: str) -> bool:
-    words = set(text.lower().replace(",", " ").replace(".", " ").replace("!", " ").split())
+    words = set(re.sub(r"[,.!?।¡¿]", " ", text.lower()).split())
     phrase = " ".join(text.lower().split())
     neg = bool(words & NO_WORDS) or "do not" in phrase
     pos = bool(words & YES_WORDS) or "go ahead" in phrase or "do it" in phrase.replace("don't do it", "")
@@ -404,7 +409,12 @@ def _said_no(text: str) -> bool:
 TIME_WORDS = ("tomorrow", "today", "tonight", "morning", "afternoon", "evening", "noon",
               "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
               "next week", "o'clock", "thirty", "ten", "eleven", "twelve", "nine", "eight",
-              "seven", "six", "five", "four", "three", "two", "one", "kal", "am", "pm", "daily")
+              "seven", "six", "five", "four", "three", "two", "one", "kal", "am", "pm", "daily",
+              # Hindi / Bhojpuri, Kannada, Spanish time words
+              "बजे", "बजकर", "सुबह", "शाम", "रात", "दोपहर", "कल", "आज", "परसों", "भोर", "साँझ",
+              "ಗಂಟೆ", "ನಾಳೆ", "ಇಂದು", "ಇವತ್ತು", "ಬೆಳಿಗ್ಗೆ", "ಸಂಜೆ", "ರಾತ್ರಿ", "ಮಧ್ಯಾಹ್ನ",
+              "mañana", "hoy", "tarde", "noche", "hora", "las ", "lunes", "martes", "miércoles",
+              "jueves", "viernes", "sábado", "domingo")
 
 
 def _time_said() -> bool:
@@ -424,7 +434,8 @@ def add_event(title: str, start_at: str, member: str = "", minutes: int = 60) ->
     same_day = [e for e in db.q("SELECT * FROM events WHERE source='voice' AND substr(start_at,1,10)=?",
                                 (when.date().isoformat(),)) if _same_event(title, e["title"])]
     changing = re.search(r"\b(instead|change|move|shift|resched\w*|make it|push|postpone|"
-                         r"earlier|later|actually|rather)\b", db.recall("last_user_text").lower())
+                         r"earlier|later|actually|rather|cambia|mejor)\b|बदल|की जगह|ಬದಲಾಯಿಸಿ|ಬದಲು",
+                         db.recall("last_user_text").lower())
     if same_day and any(_dt(e["start_at"]) == when for e in same_day):
         return {"status": "already_on_calendar", "when": _spoken_time(when)}
     if same_day and not changing:
@@ -1029,7 +1040,8 @@ def send_family_update(message: str, urgent: bool = False) -> dict:
         r"\b(tell|message|text|inform|notify|update|ping|let)\s+(the\s+)?"
         r"(family|everyone|everybody|them|rohan|kabir|dadi|grandma|all)\b"
         r"|\b(send|post)\b.*\b(family|everyone|update|message|group|slack|whatsapp)\b"
-        r"|\bfamily (update|group|channel|chat)\b|\bannounce\b", said))
+        r"|\bfamily (update|group|channel|chat)\b|\bannounce\b"
+        r"|परिवार|घर वालों|सबको|बता द|मैसेज|ಕುಟುಂಬ|ಮನೆಯವರಿಗೆ|ತಿಳಿಸಿ|familia|avisa|dile", said))
     if not asked:  # "Yes, sure" right after HomePilot offered to post it
         offered = db.recall("last_assistant_text").lower()
         asked = bool(set(re.findall(r"[a-z]+", said)) & (YES_WORDS | {"please", "do"})) and \

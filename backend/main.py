@@ -19,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agora, brain, config, db, store_server, tools
+from . import agora, brain, config, db, languages, store_server, tools
 
 async def _order_watcher():
     """Every 5 s: follow store orders over MCP and announce changes (paid, on the way…)."""
@@ -158,6 +158,8 @@ def state():
                       for r in db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at")],
         "cal_qr": _recent(db.recall("show_cal_qr"), 15),
         "devices": tools.devices(),
+        "language": languages.current(),
+        "languages": languages.options(),
         "fired": db.q("SELECT * FROM activity WHERE kind='alarm' ORDER BY id DESC LIMIT 5"),
         "pending": db.q("SELECT * FROM pending_actions WHERE status='awaiting_confirmation'"),
         "notifications": db.q("SELECT * FROM notifications ORDER BY id DESC LIMIT 10"),
@@ -173,10 +175,21 @@ def state():
 
 @app.post("/api/reset")
 def reset():
+    lang = languages.current()
     db.reset_db()
     store_server.reset_store()
+    if lang != "en":
+        db.remember("language", lang)   # the chosen language survives a demo reset
     db.log("system", "Demo data reset")
     return {"ok": True}
+
+
+@app.post("/api/language")
+async def set_language(request: Request):
+    """Pick the conversation language. Takes effect for typed chat at once and for the voice
+    call the next time it starts (speech-to-text and voice are set when the agent joins)."""
+    code = languages.set_current(str((await request.json()).get("lang", "en")))
+    return {"ok": True, "language": code, "restart_call": agora._state.get("agent_id") is not None}
 
 
 @app.post("/api/iot/event")

@@ -42,6 +42,7 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | **Missed-medicine alert** | If nobody presses **Got it** (or says “Dadi took her tablet”, `reminder_done`) within **5 minutes**, HomePilot escalates: “⚠️ Dadi hasn't confirmed the 8 PM reminder: take her BP tablet. Can someone check on Dadi?” goes to the family channel and is spoken in the live call |
 | **Family spending summary** | “How much did we spend this week?” → `spending_summary` adds up technician bookings, grocery deliveries and **paid** store orders, with a breakdown by category and a warning against the monthly budget and the 1,500-rupee repair limit. “Spent this week” is a live KPI on the dashboard |
 | **IoT / Physical AI (optional)** | The AC and washing machine are connected (simulated in the demo). A device posts its status to `/api/iot/event` (the same JSON a smart AC or Home Assistant webhook would send). A new error code makes HomePilot **speak up first**: “Heads up: the living room AC just reported error E4 by itself and the outdoor fan has stopped. It's the third time in 64 days. Want me to find a technician?” It's logged to the service history and posted to the family. `get_device_status` lets the agent read live temperature and fan speed instead of asking. Try **Simulate AC fault** on the dashboard |
+| **Multilingual** | Pick **English, हिन्दी Hindi, ಕನ್ನಡ Kannada, भोजपुरी Bhojpuri or Español** on the dashboard. The agent then listens in that language (Agora speech-to-text), replies in it (LLM instruction) and speaks it with a matching Murf Falcon voice. "No" and "yes" are understood in each language (नहीं / मत, ಬೇಡ, no / cancela), so the safety guard still works. Bhojpuri has no speech-to-text or TTS voice yet, so it listens in Hindi and replies in Bhojpuri with a Hindi voice. If a language's voice isn't accepted, the call starts in English and says so. Voices can be changed per language with `MURF_VOICE_HI`, `MURF_VOICE_KN`, `MURF_VOICE_ES`… |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
 | **Tool calling, memory, external APIs** | 31 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
@@ -97,7 +98,7 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | Integrations | Slack webhook, iCalendar (RFC 5545) feed, Google Calendar links, IoT webhook |
 | Frontend | HTML, CSS, vanilla JavaScript, qrcode-generator |
 | Hosting | Render (auto-deploy from `main`); Cloudflare tunnel for local runs |
-| Tests | pytest, 49 tests with a faked LLM |
+| Tests | pytest, 52 tests with a faked LLM |
 
 ## Demo script
 
@@ -161,7 +162,7 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 ## MCP and tests
 ```bash
 mcp dev backend/mcp_server.py      # inspect the 31 household tools in MCP Inspector
-pytest -q                          # 49 tests, no keys needed (the LLM is faked)
+pytest -q                          # 52 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout
@@ -176,6 +177,7 @@ backend/
   demo.py            Demo mode script (real tools, no LLM)
   store_server.py    FreshMart demo store as an MCP server
   store_client.py    HomePilot's MCP client for commerce servers
+  languages.py       conversation languages: speech-to-text, Murf voice, reply language
   rag.py             manual search (BM25)
   db.py              SQLite: calendar, tasks, shopping, appliances, bookings, reminders, memory
   agora.py           RTC tokens, start/stop/speak for the Conversational AI agent, Murf config
@@ -201,6 +203,6 @@ HomePilot never sees a PIN or bank details (see NPCI’s UPI Reserve Pay for age
 
 ## What's next
 - Real integrations: two-way Google Calendar, WhatsApp, a grocery delivery API, Urban Company-style service booking.
-- Hindi and Kannada voices for grandparents (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
+- More languages (Tamil, Telugu, Bengali, Marathi) and auto-detecting the speaker's language.
 - Real device integrations (Home Assistant, Tuya, Matter) for the IoT webhook.
 - Proactive phone calls: HomePilot rings Dadi's phone at 8 PM for her medicine.

@@ -710,3 +710,63 @@ def test_dashboard_polling_does_not_log_spending():
     for _ in range(3):
         c.get("/api/state")
     assert not db.q("SELECT * FROM activity WHERE kind='money'")
+
+
+def test_language_sets_asr_voice_greeting_and_reply_instruction():
+    from backend import agora, languages
+    c = TestClient(app)
+    assert c.post("/api/language", json={"lang": "hi"}).json()["language"] == "hi"
+    body = agora.join_body("ch", 1, languages.current())["properties"]
+    assert body["asr"]["language"] == "hi-IN"
+    assert body["tts"]["params"]["locale"] == "hi-IN" and body["tts"]["params"]["voiceId"]
+    assert body["llm"]["greeting_message"].startswith("नमस्ते")
+    assert "Reply ONLY in Hindi" in brain.live_context()
+    c.post("/api/language", json={"lang": "bho"})
+    assert agora.join_body("ch", 1, "bho")["properties"]["asr"]["language"] == "hi-IN"
+    assert "Bhojpuri" in brain.live_context()
+    c.post("/api/reset")
+    assert c.get("/api/state").json()["language"] == "bho"          # survives a demo reset
+    c.post("/api/language", json={"lang": "xx"})
+    assert c.get("/api/state").json()["language"] == "en" and "LANGUAGE" not in brain.live_context()
+
+
+def test_no_and_yes_work_in_indian_languages(monkeypatch):
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    assert tools._said_no("नहीं, बुक मत करो।") and tools._said_no("ಬೇಡ") and tools._said_no("No, cancela")
+    assert not tools._said_no("हाँ, कर दो") and tools._said_no("मत करो") and not tools._said_no("ಹೌದು ಸರಿ") and not tools._said_no("Sí, vale")
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    db.remember("last_user_text", "नहीं, बुक मत करो")
+    r = tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    assert r.get("status") != "done" and not db.q("SELECT * FROM bookings")
+    db.remember("last_user_text", "कल सुबह छह बजे याद दिलाना")
+    assert tools._time_said()
+
+
+def test_rejected_language_voice_falls_back_to_english(monkeypatch):
+    import asyncio
+    from backend import agora, languages
+    languages.set_current("kn")
+    sent = []
+
+    class R:
+        def __init__(self, code, text, data=None):
+            self.status_code, self.text, self._d = code, text, data or {}
+        def json(self):
+            return self._d
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, json=None):
+            sent.append(json["properties"]["asr"]["language"])
+            return R(400, "invalid asr language") if len(sent) == 1 else R(200, "ok", {"agent_id": "A1"})
+
+    monkeypatch.setattr(agora, "missing_settings", lambda: [])
+    monkeypatch.setattr(agora.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(agora, "rtc_token", lambda *a, **k: "t")
+    r = asyncio.run(agora.start_agent("ch", 1))
+    assert r["ok"] and sent[0] == "kn-IN" and sent[1] == config.AGORA_ASR_LANGUAGE
+    assert r["language"] == "en" and "Kannada" in r["note"]
+    agora._state["agent_id"] = None

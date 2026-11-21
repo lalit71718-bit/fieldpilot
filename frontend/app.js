@@ -125,7 +125,8 @@ async function startVoice() {
   const res = await api("/api/agent/start", { method: "POST", body: JSON.stringify({ uid: cfg.uid }) });
   if (!res.ok) { setStatus("Agent failed to start", res.error?.slice(0, 160) || ""); return; }
   setChip("chip-agent", "Assistant: joining", true);
-  setStatus("Listening - just talk", 'Try: "What\'s on today?"');
+  setStatus("Listening - just talk", res.note || LANG_HINT[res.language] || 'Try: "What\'s on today?"');
+  if (res.language) $("lang").value = res.language;
 }
 
 async function stopVoice() {
@@ -200,6 +201,20 @@ $("reset").onclick = async () => {
   textHistory.length = 0; await api("/api/reset", { method: "POST" }); refresh();
 };
 
+// ------------------------------------------------------------------ language
+const LANG_HINT = {
+  hi: 'बोलिए: "आज क्या-क्या है?"', kn: 'ಹೇಳಿ: "ಇವತ್ತು ಏನೇನಿದೆ?"',
+  bho: 'बोलीं: "आज का-का बा?"', es: 'Di: "¿Qué tenemos hoy?"',
+};
+$("lang").onchange = async () => {
+  const r = await api("/api/language", { method: "POST", body: JSON.stringify({ lang: $("lang").value }) }).catch(() => null);
+  const hint = LANG_HINT[$("lang").value] || 'Say: "What\'s on today?"';
+  if (r && r.restart_call && live) {
+    setStatus("Switching language...", "");
+    await stopVoice(); await startVoice();     // voice + speech-to-text are set when the agent joins
+  } else if (!live) setStatus("Tap to talk to HomePilot", hint);
+};
+
 // ------------------------------------------------------------------ smart home simulator
 // Plays the AC's own sensor report (what a real smart AC / Home Assistant webhook would send).
 $("iot-fault").onclick = async () => {
@@ -253,6 +268,10 @@ $("demo-run").onclick = async () => {
 
 // ------------------------------------------------------------------ dashboard
 function render(s) {
+  if (s.language && document.activeElement !== $("lang")) {
+    $("lang").value = s.language;
+    if (!live && !demoOn && $("call-status").textContent.startsWith("Tap")) $("call-hint").textContent = LANG_HINT[s.language] || 'Say: "What\'s on today?"';
+  }
   const nameOf = (id) => (s.members.find((m) => m.id === id) || {}).name || id;
 
   // Transcript: what the assistant actually heard and said (voice or text).
