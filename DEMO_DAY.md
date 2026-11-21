@@ -20,7 +20,7 @@ It opens the website; click **Open the app** for the voice dashboard (`/app.html
 
 ## Live demo (about 90 seconds)
 1. Click the mic and listen to the daily briefing.
-2. "The living room AC is showing E four again and blowing warm air." → point at the blue **Repeat fault** banner.
+2. Click **Simulate AC fault** (Smart home card) → HomePilot speaks up first: the AC reported E4 by itself. Or say: "The living room AC is showing E four again and blowing warm air." → point at the blue **Repeat fault** banner.
 3. "The outdoor fan isn't spinning. Can you get someone to fix it?" → it skips the slot that clashes with Dadi's doctor visit → **yellow banner**.
 4. "Yes." → point at the calendar (new orange row) and the reminder.
 5. "Add milk, paneer and Dadi's BP tablets to the shopping list, and ask Rohan to pick them up on his way home." → shopping list, task, Slack on your phone.
@@ -30,6 +30,12 @@ It opens the website; click **Open the app** for the voice dashboard (`/app.html
 9. (Proactive) "Remind me in one minute to call the plumber." → a minute later HomePilot says it out loud and the dashboard pops up with a chime.
 10. (Wow) "Get Rohan on this call." → open the Slack link on your phone → **Join call** → talk from the phone.
 
+11. "Put it on my phone." → scan the QR → tap **Add** → it's in your phone's calendar.
+12. "Order a veg biryani." → "Yes." → scan the payment QR → **Approve** → "preparing".
+13. "How much did we spend this week?"
+
+Safety moment: at the yellow banner say **"No, don't book it."** Nothing is booked. After a booking, "Cancel the technician" undoes it.
+
 Say each sentence in one go, then wait for the answer.
 
 ## If something fails
@@ -38,6 +44,8 @@ Say each sentence in one go, then wait for the answer.
 | "Sorry, I lost connection" | Ctrl+C, then `python run_demo.py` again (new tunnel) |
 | Slow answers | Free AI limit: keep talking slowly; failover kicks in |
 | Voice won't start | Use the text box (same assistant, same dashboard) |
+| AI quota / rate limit, or no time | Click **▶ Demo mode**: the whole story through the real tools in about 2 minutes, no LLM needed |
+| Speech-to-text mishears names | Speak slower, use headphones; Demo mode as a backup |
 | Wi-Fi down | Switch to the hotspot, or play the backup video |
 
 Backup video: [add link]

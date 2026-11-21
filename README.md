@@ -44,11 +44,15 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | **IoT / Physical AI (optional)** | The AC and washing machine are connected (simulated in the demo). A device posts its status to `/api/iot/event` (the same JSON a smart AC or Home Assistant webhook would send). A new error code makes HomePilot **speak up first**: “Heads up: the living room AC just reported error E4 by itself and the outdoor fan has stopped. It's the third time in 64 days. Want me to find a technician?” It's logged to the service history and posted to the family. `get_device_status` lets the agent read live temperature and fan speed instead of asking. Try **Simulate AC fault** on the dashboard |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
-| **Tool calling, memory, external APIs** | 30 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+| **Tool calling, memory, external APIs** | 31 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
 
 ## Safety and reliability
 - **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
-- **No double actions:** repeated sentences can't book twice, add duplicate items or re-send the summary.
+- **No double actions:** repeated sentences can't book twice, add duplicate items or re-send the summary. Changing a time moves the event instead of copying it.
+- **Undo:** “cancel the technician” after a booking frees the slot and removes its calendar event and reminder (`cancel_booking`).
+- **One reply per sentence:** when Agora sends a half-finished sentence and then the full one, only the newest request answers, so there are no double replies or double actions.
+- **Missed-alarm safety net:** an alarm keeps ringing until “Got it”; if nobody answers within 5 minutes of it ringing, the family is alerted.
+- **Payments stay with the user:** orders are approved on the user's own phone; HomePilot never asks for a PIN, card or bank details.
 - **Never invents times:** reminders and events only use a time the user actually said.
 - **Natural turn-taking:** Agora semantic end-of-speech with pause detection, so a slow sentence or "hold on" isn't cut into several requests.
 - **Honest about itself:** the assistant only describes features that exist; durations come from the tools, never from the model's arithmetic.
@@ -57,22 +61,43 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 ## Architecture
 
 ```
- Anika (browser mic, live family dashboard)        Rohan (phone, /expert.html)
-        │  Agora RTC audio                               │  joins the same channel
-        ▼                                                ▼
- Agora Conversational AI agent ── speech-to-text, turn-taking, interruptions
-        │  OpenAI-format POST /chat/completions
-        ▼
- HomePilot brain (FastAPI)
-   ├─ brain.py       tool-calling loop, streamed replies, failover, speech cleanup
-   ├─ memory         family, preferences, active issue, pending approvals (every turn)
-   ├─ rag.py         search over appliance owner's manuals
-   ├─ tools.py       30 household tools + confirmation gate + "no means no" guard
-   └─ mcp_server.py  the same tools over MCP
+ Anika (browser mic + live dashboard)               Rohan (phone, /expert.html)
+        │  Agora RTC audio                                │  joins the same channel
+        ▼                                                 ▼
+ Agora Conversational AI agent ── speech-to-text, end-of-speech detection, interruptions
+        │  OpenAI-format POST /chat/completions (custom LLM)      ▲ speak API: alarms,
+        ▼                                                         │ AC faults, order updates
+ HomePilot brain (FastAPI) ───────────────────────────────────────┘
+   ├─ brain.py         tool-calling loop, streamed replies, LLM failover (Groq ⇄ Gemini)
+   ├─ live context     family, preferences, shopping total, reminders, approvals (every turn)
+   ├─ tools.py         31 tools + confirmation gate + "no means no" guard + dedupe
+   ├─ rag.py           BM25 search over appliance owner's manuals
+   ├─ demo.py          Demo mode: the whole story through the real tools, no LLM
+   └─ mcp_server.py    the same tools for other AI apps over MCP
+        │
+        ├─ MCP client ──► FreshMart demo store (MCP server, /store/mcp) ──► payment approved on phone (/pay.html)
+        ├─ Slack incoming webhook ──► #family channel
+        ├─ /calendar.ics + one-tap .ics / Google links ──► phone & Google Calendar (/cal.html)
+        └─ /api/iot/event ◄── smart AC / washing machine (simulated; Home Assistant-style webhook)
         │
         ▼ reply text → Murf Falcon TTS (via Agora) → spoken answer
- Slack incoming webhook → #family channel
 ```
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Voice transport | Agora RTC Web SDK 4.22 (vendored) |
+| Voice agent | Agora Conversational AI Engine v2 REST (join, leave, speak), custom LLM endpoint |
+| Text-to-speech | Murf AI Falcon (streaming, via Agora) |
+| Backend | Python 3, FastAPI, async SSE streaming, SQLite |
+| LLM | Any OpenAI-compatible API; Groq + Gemini with instant failover |
+| Agent protocols | Tool calling (31 tools), MCP client and servers (`mcp` Python SDK, streamable HTTP) |
+| Knowledge | BM25 retrieval over appliance manuals |
+| Integrations | Slack webhook, iCalendar (RFC 5545) feed, Google Calendar links, IoT webhook |
+| Frontend | HTML, CSS, vanilla JavaScript, qrcode-generator |
+| Hosting | Render (auto-deploy from `main`); Cloudflare tunnel for local runs |
+| Tests | pytest, 49 tests with a faked LLM |
 
 ## Demo script
 
@@ -135,26 +160,34 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 
 ## MCP and tests
 ```bash
-mcp dev backend/mcp_server.py      # inspect the 30 household tools in MCP Inspector
-pytest -q                          # 44 tests, no keys needed (the LLM is faked)
+mcp dev backend/mcp_server.py      # inspect the 31 household tools in MCP Inspector
+pytest -q                          # 49 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout
 ```
-run_demo.py        one-command demo launcher (tunnel + server + browser)
-render.yaml        one-click Render deploy
+run_demo.py          one-command demo launcher (tunnel + server + browser)
+render.yaml          one-click Render deploy
 backend/
-  main.py          HTTP API, /chat/completions for Agora, /api/state, /api/diag
-  brain.py         prompt, live context, tool loop, streaming, failover, speech cleanup
-  tools.py         household tools, confirmation gate, safety guards
-  rag.py           manual search
-  db.py            SQLite stand-in for calendar, tasks, shopping, appliance records, bookings
-  agora.py         RTC tokens, start/stop the Conversational AI agent, Murf TTS config
-  integrations.py  Slack webhook (family channel)
-  mcp_server.py    MCP server over the same tools
-  manuals/         appliance owner's manuals used for RAG
-frontend/          index.html = website, app.html = voice panel + live dashboard, expert.html = join-the-call page
-tests/
+  main.py            HTTP API: /chat/completions for Agora, /api/state, /calendar.ics,
+                     /api/iot/event, /api/demo/step, background alarm and order watchers
+  brain.py           prompt, live context, tool loop, streaming, failover, speech cleanup
+  tools.py           household tools, confirmation gate, safety guards, IoT, spending
+  demo.py            Demo mode script (real tools, no LLM)
+  store_server.py    FreshMart demo store as an MCP server
+  store_client.py    HomePilot's MCP client for commerce servers
+  rag.py             manual search (BM25)
+  db.py              SQLite: calendar, tasks, shopping, appliances, bookings, reminders, memory
+  agora.py           RTC tokens, start/stop/speak for the Conversational AI agent, Murf config
+  integrations.py    Slack webhook (family channel)
+  mcp_server.py      MCP server over the same tools
+  manuals/           appliance owner's manuals used for RAG
+frontend/
+  index.html         website           app.html     voice panel + live dashboard
+  expert.html        join the call     list.html    live shopping list for the phone
+  cal.html           alarms/events to the phone calendar
+  pay.html           approve a store payment (demo)
+tests/               pytest suite
 ```
 
 ## Ordering from real apps (Swiggy, Zomato…)
