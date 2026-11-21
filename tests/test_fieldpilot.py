@@ -515,6 +515,7 @@ def test_unconfirmed_medicine_reminder_alerts_the_family(monkeypatch):
     db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
            ("take her BP tablet", "dadi", past, "scheduled", past))
     tools.due_reminders()
+    db.run("UPDATE reminders SET fired_at=?", (past,))          # it rang 7 minutes ago
     out = tools.escalate_missed_reminders()
     assert len(out) == 1 and "Dadi hasn't confirmed" in out[0]["message"] and "BP tablet" in sent[-1]
     assert tools.escalate_missed_reminders() == []             # alerts once only
@@ -526,6 +527,7 @@ def test_got_it_stops_the_escalation():
     db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
            ("take her BP tablet", "dadi", past, "scheduled", past))
     tools.due_reminders()
+    db.run("UPDATE reminders SET fired_at=?", (past,))
     TestClient(app).post("/api/alarm/ack", json={"title": "Reminder for Dadi",
                                                  "detail": "take her BP tablet", "how": "done"})
     assert tools.escalate_missed_reminders() == []
@@ -537,6 +539,7 @@ def test_voice_confirmation_marks_reminder_done():
     db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
            ("take her BP tablet", "dadi", past, "scheduled", past))
     tools.due_reminders()
+    db.run("UPDATE reminders SET fired_at=?", (db.iso(db.now() - timedelta(minutes=7)),))
     assert tools.call("reminder_done", {"member": "Dadi", "what": "BP tablet"})["status"] == "confirmed"
     assert tools.escalate_missed_reminders() == []
 
@@ -564,6 +567,7 @@ def test_changing_the_time_moves_the_event_instead_of_duplicating():
     from datetime import timedelta
     day = (db.now() + timedelta(days=1)).date().isoformat()
     assert tools.call("add_event", {"title": "Hackathon", "start_at": f"{day}T07:00", "member": "Anika"})["status"] == "added"
+    db.remember("last_user_text", "make it 6 instead of 7")
     r = tools.call("add_event", {"title": "Hackathon wake up", "start_at": f"{day}T06:00"})
     assert r["status"] == "moved"
     ev = db.q("SELECT * FROM events WHERE title LIKE 'Hackathon%'")
@@ -656,3 +660,53 @@ def test_smart_ac_reports_its_own_fault(monkeypatch):
     assert again["status"] == "updated" and len(sent) == 1        # no repeat alert
     live = tools.call("get_device_status", {"appliance": "living room AC"})
     assert live["live"]["outdoor_fan_rpm"] == 0
+
+
+def test_escalation_counts_from_when_it_rang_not_scheduled_time(monkeypatch):
+    """Laptop asleep at 6 AM: the alarm rings on waking; family is alerted only 5 min later."""
+    from datetime import timedelta
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    past = db.iso(db.now() - timedelta(hours=7))
+    db.run("INSERT INTO reminders (text,member,remind_at,status,created_at) VALUES (?,?,?,?,?)",
+           ("Hackathon alarm", "anika", past, "scheduled", past))
+    assert len(tools.due_reminders()) == 1
+    assert tools.escalate_missed_reminders() == []              # it only just rang
+
+
+def test_qr_posts_to_slack_once(monkeypatch):
+    sent = []
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: sent.append(m) or "sent")
+    for _ in range(4):
+        tools.call("calendar_on_phone", {})
+    assert len(sent) == 1
+
+
+def test_two_alarm_events_are_not_merged_without_a_change_word():
+    from datetime import timedelta
+    day = (db.now() + timedelta(days=1)).date().isoformat()
+    db.remember("last_user_text", "set the hackathon for 6 AM and 7 AM")
+    tools.call("add_event", {"title": "Hackathon", "start_at": f"{day}T06:00"})
+    r = tools.call("add_event", {"title": "Hackathon", "start_at": f"{day}T07:00"})
+    assert r["status"] == "already_on_calendar_at_another_time"
+    assert db.q("SELECT start_at FROM events WHERE title='Hackathon'")[0]["start_at"].endswith("06:00:00")
+
+
+def test_cancel_booking_after_it_was_made(monkeypatch):
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: "sent")
+    o = _ok_slot()
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    tools.call("confirm_action", {"action_id": p["action_id"], "approved": True})
+    r = tools.call("cancel_booking", {})
+    assert r["status"] == "cancelled"
+    assert not db.q("SELECT * FROM events WHERE source LIKE 'booking%'")
+    assert not db.q("SELECT * FROM reminders WHERE status='scheduled' AND text LIKE '%BK-%'")
+    assert tools.call("spending_summary", {})["total_inr"] == 0
+    p = tools.call("book_service", {"provider": o["provider"], "slot_at": o["slot_at"]})
+    assert p["status"] == "awaiting_confirmation"                # can book again
+
+
+def test_dashboard_polling_does_not_log_spending():
+    c = TestClient(app)
+    for _ in range(3):
+        c.get("/api/state")
+    assert not db.q("SELECT * FROM activity WHERE kind='money'")

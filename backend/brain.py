@@ -72,6 +72,15 @@ ACTIONS
 - Changing a time ("make it 6 instead of 7"): call add_event with the new time (it MOVES the
   event, no duplicate) and cancel_reminder + set_reminder for the alarm. cancel_event removes one.
 - Wrap-up ("that's all", "update the family"): daily_summary, then a one-sentence recap.
+- A booking already made and the user says "no / don't book it / cancel the technician":
+  call cancel_booking (NOT cancel_reminder). Never claim it's cancelled unless the tool says so.
+- ALARMS: "alarms at 6 and 7" = TWO set_reminder calls, one per time. An alarm is NOT a
+  calendar event: add one event for the occasion itself (e.g. the hackathon at 8 AM) only if
+  the user gives its time. Call calendar_on_phone ONCE per conversation.
+- DATES: after midnight and before 5 AM, "tomorrow morning" or "today" both mean the coming
+  morning. Always read back the day name and "in X hours" from the tool (e.g. "Saturday at
+  6 AM, in 4 hours 40 minutes"). Speech-to-text mishears: "two days" is usually "today";
+  if a day sounds odd, ask instead of guessing.
 - Alarms are reminders: set_reminder / cancel_reminder. They ring on the HomePilot dashboard,
   are spoken in this call and posted to the family channel; with calendar_on_phone they also
   alert on the user's phone. If nobody confirms within 5 minutes, the family is alerted. If the user
@@ -341,6 +350,7 @@ FILLERS = {
     "reminder_done": "Great, noting that.",
     "calendar_on_phone": "Putting a QR code on the screen.",
     "cancel_event": "Removing it.",
+    "cancel_booking": "Cancelling the booking.",
     "get_device_status": "Checking the AC's sensors.",
     "spending_summary": "Adding it up.",
     "remember_fact": "I'll remember that.",

@@ -29,7 +29,7 @@ CREATE TABLE slots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT, rating 
 CREATE TABLE bookings (id TEXT PRIMARY KEY, appliance_id TEXT, provider TEXT, slot_at TEXT,
     fee INTEGER, status TEXT, created_at TEXT);
 CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, member TEXT,
-    remind_at TEXT, status TEXT, created_at TEXT);
+    remind_at TEXT, status TEXT, created_at TEXT, fired_at TEXT);
 CREATE TABLE pending_actions (id TEXT PRIMARY KEY, kind TEXT, payload TEXT, summary TEXT,
     status TEXT, created_at TEXT);
 CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT, recipient TEXT,
@@ -151,6 +151,10 @@ def conn() -> sqlite3.Connection:
         cols = {r[1] for r in _conn.execute("PRAGMA table_info(shopping)").fetchall()}
         if not exists or "bought_by" not in cols:
             reset_db()  # older database layout: start fresh with the current demo data
+        rcols = {r[1] for r in _conn.execute("PRAGMA table_info(reminders)").fetchall()}
+        if "fired_at" not in rcols:
+            _conn.execute("ALTER TABLE reminders ADD COLUMN fired_at TEXT")
+            _conn.commit()
     return _conn
 
 

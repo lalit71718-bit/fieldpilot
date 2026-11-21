@@ -147,7 +147,7 @@ def state():
         "shopping_total": tools.shopping_status()["estimated_total_inr"],
         "grocery_orders": db.q("SELECT * FROM grocery_orders ORDER BY created_at DESC"),
         "store_orders": store_server.all_orders(),
-        "spent_week": tools.spending_summary("week")["total_inr"] if db.q(
+        "spent_week": tools.spending_summary("week", log=False)["total_inr"] if db.q(
             "SELECT id FROM bookings UNION SELECT id FROM grocery_orders") or db.recall("store_orders") else 0,
         "store_cart": store_server._cart(tools.CART_ID),
         "appliance": db.one("SELECT * FROM appliances WHERE id=?", (active,)) if active else None,

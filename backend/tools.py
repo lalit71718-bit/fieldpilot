@@ -423,10 +423,17 @@ def add_event(title: str, start_at: str, member: str = "", minutes: int = 60) ->
     # "Make it 6 instead of 7": the same event on the same day is MOVED, never duplicated.
     same_day = [e for e in db.q("SELECT * FROM events WHERE source='voice' AND substr(start_at,1,10)=?",
                                 (when.date().isoformat(),)) if _same_event(title, e["title"])]
+    changing = re.search(r"\b(instead|change|move|shift|resched\w*|make it|push|postpone|"
+                         r"earlier|later|actually|rather)\b", db.recall("last_user_text").lower())
+    if same_day and any(_dt(e["start_at"]) == when for e in same_day):
+        return {"status": "already_on_calendar", "when": _spoken_time(when)}
+    if same_day and not changing:
+        return {"status": "already_on_calendar_at_another_time",
+                "existing": [f"{e['title']} {_spoken_time(_dt(e['start_at']))}" for e in same_day],
+                "note": ("Alarms are set_reminder only; don't add a calendar event per alarm. "
+                         "If the user wants to change the time, they'll say so.")}
     if same_day:
         e = same_day[0]
-        if _dt(e["start_at"]) == when:
-            return {"status": "already_on_calendar", "when": _spoken_time(when)}
         db.run("UPDATE events SET start_at=?, minutes=?, member=? WHERE id=?",
                (db.iso(when), minutes, m["id"] if m else e["member"], e["id"]))
         for extra in same_day[1:]:
@@ -443,6 +450,26 @@ def add_event(title: str, start_at: str, member: str = "", minutes: int = 60) ->
     db.log("calendar", f"Added: {title}", _spoken_time(when))
     return {"status": "added", "when": _spoken_time(when),
             "phone": "It can go on the user's phone calendar: calendar_on_phone shows a QR code."}
+
+
+def cancel_booking(booking_id: str = "") -> dict:
+    """Cancel a technician booking (the latest one if no id): frees the slot and removes its
+    calendar event and reminder, and tells the family."""
+    b = (db.one("SELECT * FROM bookings WHERE id=? AND status='booked'", (booking_id.upper(),))
+         if booking_id else None) or db.one(
+        "SELECT * FROM bookings WHERE status='booked' ORDER BY created_at DESC")
+    if not b:
+        return {"status": "nothing_to_cancel", "note": "There is no active booking."}
+    db.run("UPDATE bookings SET status='cancelled' WHERE id=?", (b["id"],))
+    db.run("UPDATE slots SET available=1 WHERE provider=? AND slot_at=?", (b["provider"], b["slot_at"]))
+    db.run("DELETE FROM events WHERE source=?", (f"booking {b['id']}",))
+    db.run("UPDATE reminders SET status='cancelled' WHERE status='scheduled' AND text LIKE ?",
+           (f"%({b['id']})%",))
+    when = _spoken_time(_dt(b["slot_at"]))
+    db.log("booking", f"Cancelled {b['id']}: {b['provider']}", when)
+    _send_family(f"Cancelled: {b['provider']} visit {when} ({b['id']}). No technician is coming.")
+    return {"status": "cancelled", "booking_id": b["id"], "was": f"{b['provider']} {when}",
+            "note": "Calendar event and reminder removed; the family was told."}
 
 
 def _same_event(a: str, b: str) -> bool:
@@ -472,7 +499,11 @@ def cancel_event(title: str, when: str = "") -> dict:
 def calendar_on_phone() -> dict:
     """Put the family calendar and alarms on the user's own phone: shows a QR code on the
     dashboard that opens a page with one-tap 'Add to Google Calendar' / phone calendar buttons."""
+    last = db.recall("show_cal_qr")
     db.remember("show_cal_qr", db.iso(db.now()))
+    if last and _dt(last) >= db.now() - timedelta(minutes=10):
+        return {"status": "qr_already_on_screen",
+                "say": "The QR code is already on the dashboard; just scan it."}
     link = f"{config.PUBLIC_BASE_URL or ''}/cal.html"
     _send_family(f"Put the HomePilot family calendar and alarms on your phone: {link}")
     db.log("calendar", "Calendar QR shown", "Scan to add events and alarms to the phone")
@@ -808,7 +839,8 @@ def due_reminders() -> list[dict]:
     due = db.q("SELECT * FROM reminders WHERE status='scheduled' AND remind_at<=? ORDER BY remind_at",
                (db.iso(db.now()),))
     for r in due:
-        db.run("UPDATE reminders SET status='fired' WHERE id=?", (r["id"],))
+        db.run("UPDATE reminders SET status='fired', fired_at=? WHERE id=?",
+               (db.iso(db.now()), r["id"]))
         m = db.one("SELECT name FROM members WHERE id=?", (r["member"],))
         name = m["name"] if m else "Anika"
         r["spoken"] = f"Reminder for {name}: {r['text']}."
@@ -846,7 +878,10 @@ def escalate_missed_reminders() -> list[dict]:
     """Reminders nobody confirmed within a few minutes are escalated to the whole family
     (the senior-care safety net: 'Dadi hasn't confirmed her BP tablet')."""
     cutoff = db.iso(db.now() - timedelta(minutes=ESCALATE_AFTER_MIN))
-    rows = db.q("SELECT * FROM reminders WHERE status='fired' AND remind_at<=?", (cutoff,))
+    # Counted from when it actually rang (a laptop that slept through 6 AM rings on waking;
+    # the family is alerted only if nobody answers for 5 minutes after that).
+    rows = db.q("SELECT * FROM reminders WHERE status='fired' AND COALESCE(fired_at, remind_at)<=?",
+                (cutoff,))
     out = []
     for r in rows:
         db.run("UPDATE reminders SET status='escalated' WHERE id=?", (r["id"],))
@@ -876,7 +911,7 @@ def calendar_links(title: str, start: str, minutes: int = 60) -> dict:
 SPEND_CATEGORIES = {"booking": "Home repairs", "grocery": "Groceries", "store": "Food & delivery"}
 
 
-def spending_summary(period: str = "week") -> dict:
+def spending_summary(period: str = "week", log: bool = True) -> dict:
     """What the family spent through HomePilot: repairs, grocery deliveries and store orders."""
     days = {"today": 1, "week": 7, "month": 30}.get((period or "week").lower(), 7)
     since = db.now() - timedelta(days=days)
@@ -903,7 +938,8 @@ def spending_summary(period: str = "week") -> dict:
     over_repair = [i for i in items if i["category"] == "booking" and i["amount"] > 1500]
     if over_repair:
         warn += " A repair went over the 1,500 rupee limit."
-    db.log("money", f"Spending summary ({period})", f"{total} rupees")
+    if log:  # the dashboard polls this every few seconds without logging
+        db.log("money", f"Spending summary ({period})", f"{total} rupees")
     return {"period": period, "total_inr": total, "by_category": by_cat,
             "items": [f"{i['what']}: {i['amount']} rupees" for i in items],
             "monthly_budget_inr": budget, "note": warn.strip() or "Within budget."}
@@ -1217,6 +1253,10 @@ TOOLS = {
         "Live sensor readings from connected appliances (smart AC: temperature, fan speed, "
         "error code; washing machine). Use before asking the user to describe a fault.",
         {"appliance": STR})),
+    "cancel_booking": (cancel_booking, _s(
+        "Cancel a technician booking that was already made ('don't book it' AFTER it was "
+        "booked, 'cancel the technician'). Removes its calendar event and reminder.",
+        {"booking_id": STR})),
     "cancel_event": (cancel_event, _s(
         "Remove an event from the family calendar.", {"title": STR, "when": STR}, ["title"])),
     "calendar_on_phone": (calendar_on_phone, _s(
