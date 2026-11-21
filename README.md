@@ -28,6 +28,16 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 
 ![HomePilot dashboard after a full voice run](docs/dashboard.png)
 
+## How it works, in 5 screens
+
+| | |
+|---|---|
+| ![AC reports its own fault](docs/screens/03-ac-reports-fault.png) **The house notices first:** the smart AC reports E4, HomePilot speaks up, spots the repeat fault and gives a safe check from the manual | ![Booking waits for yes](docs/screens/04-booking-needs-yes.png) **Clash-aware booking:** skips the slot that clashes with Dadi's doctor visit and waits for your “yes” |
+| ![Order over MCP](docs/screens/06-order-pay-on-phone.png) **Order by voice over MCP:** read-back, “yes”, then approve the payment on your phone | ![Payment on phone](docs/screens/07-phone-approve-payment.png) **Payment stays with you:** approved on your own phone, no PIN ever shared |
+| ![Alarms on phone](docs/screens/09-phone-calendar-alarms.png) **Alarms on your phone:** scan the QR, tap Add, it rings even if the HomePilot screen is off | ![End of day](docs/screens/08-dashboard-end-of-day.png) **End of the day:** calendar, chores, shopping, reminders, spending and the family channel, all updated by voice |
+
+More screenshots in [`docs/screens/`](docs/screens).
+
 ## How it meets the problem statement
 
 | PS-1 asks for | HomePilot |
