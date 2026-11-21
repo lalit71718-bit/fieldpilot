@@ -157,6 +157,7 @@ def state():
         "reminders": [dict(r, gcal=tools.calendar_links("⏰ " + r["text"], r["remind_at"], 10)["google"])
                       for r in db.q("SELECT * FROM reminders WHERE status='scheduled' ORDER BY remind_at")],
         "cal_qr": _recent(db.recall("show_cal_qr"), 15),
+        "devices": tools.devices(),
         "fired": db.q("SELECT * FROM activity WHERE kind='alarm' ORDER BY id DESC LIMIT 5"),
         "pending": db.q("SELECT * FROM pending_actions WHERE status='awaiting_confirmation'"),
         "notifications": db.q("SELECT * FROM notifications ORDER BY id DESC LIMIT 10"),
@@ -176,6 +177,17 @@ def reset():
     store_server.reset_store()
     db.log("system", "Demo data reset")
     return {"ok": True}
+
+
+@app.post("/api/iot/event")
+async def iot_event(request: Request):
+    """Webhook for connected appliances (or the dashboard's simulator):
+    {"device": "AC-LIVING", "status": {"error": "E4", "outdoor_fan_rpm": 0}}"""
+    body = await request.json()
+    r = tools.iot_event(str(body.get("device", "")), dict(body.get("status") or {}))
+    if r.get("spoken"):
+        await agora.speak(r["spoken"])   # said out loud in the live call, if one is running
+    return r
 
 
 @app.post("/api/demo/step")

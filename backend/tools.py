@@ -182,8 +182,8 @@ def fault_insight(appliance_id: str, extra_text: str = "") -> dict | None:
     a = db.one("SELECT * FROM appliances WHERE id=?", (appliance_id,)) if appliance_id else None
     if not a:
         return None
-    history = db.q("SELECT date, summary FROM appliance_history WHERE appliance_id=? ORDER BY date",
-                   (a["id"],))
+    history = db.q("SELECT date, summary FROM appliance_history WHERE appliance_id=? "
+                   "AND by_whom != 'Smart sensor' ORDER BY date", (a["id"],))  # = the current report
     seen = " ".join(h["summary"] for h in history)
     said = f"{extra_text} {db.recall('issue_text')} {db.recall('last_user_text')}"
     code = next((c for c in _codes_in(said) if re.search(rf"\b{c}\b", seen)), None)
@@ -909,6 +909,76 @@ def spending_summary(period: str = "week") -> dict:
             "monthly_budget_inr": budget, "note": warn.strip() or "Within budget."}
 
 
+# ---------------------------------------------------------------- Smart home (IoT)
+# Connected appliances report their own status. The demo uses a simulated smart AC and
+# washing machine; a real device (or a Home Assistant / Tuya webhook) posts the same JSON to
+# /api/iot/event, so HomePilot learns about a fault before anyone has to describe it.
+
+DEVICE_DEFAULTS = {
+    "AC-LIVING": {"online": True, "power": "on", "mode": "cool", "set_temp_c": 24,
+                  "room_temp_c": 25.5, "outdoor_fan_rpm": 820, "error": None},
+    "WM-01": {"online": True, "power": "off", "cycle": "idle", "error": None},
+}
+
+
+def devices() -> dict:
+    saved = json.loads(db.recall("iot_devices") or "{}")
+    return {k: {**v, **saved.get(k, {})} for k, v in DEVICE_DEFAULTS.items()}
+
+
+def iot_event(device: str, status: dict) -> dict:
+    """A connected appliance reports its status. A new error code makes it the active home
+    issue, adds it to the service history and alerts the family proactively."""
+    a = _appliance(device)
+    if not a:
+        return {"error": f"Unknown device {device}."}
+    all_dev = devices()
+    before = all_dev[a["id"]].get("error")
+    all_dev[a["id"]].update(status)
+    db.remember("iot_devices", json.dumps(all_dev))
+    code = all_dev[a["id"]].get("error")
+    if not code or code == before:
+        db.log("iot", f"{a['name']} status", ", ".join(f"{k} {v}" for k, v in status.items()))
+        return {"status": "updated", "device": all_dev[a["id"]]}
+    pretty = {"outdoor_fan_rpm": "outdoor fan {} rpm", "room_temp_c": "room {}°C",
+              "set_temp_c": "set to {}°C"}
+    detail = ", ".join(pretty.get(k, k.replace("_", " ") + " {}").format(v)
+                       for k, v in status.items() if k != "error")
+    db.run("INSERT INTO appliance_history (appliance_id,date,by_whom,summary) VALUES (?,?,?,?)",
+           (a["id"], db.now().date().isoformat(), "Smart sensor",
+            f"Error {code} reported by the {a['name']} itself ({detail})."))
+    db.remember("active_appliance", a["id"])
+    db.remember("issue_text", f"{a['name']} error {code}")
+    ins = fault_insight(a["id"], code) or {}
+    times = f" It's error {code} for the {_nth(ins['previous'] + 1)} time in {ins['first_seen_days_ago']} days." \
+        if ins.get("previous", 0) >= 1 else ""
+    spoken = (f"Heads up: the {a['name']} just reported error {code} by itself"
+              f"{' and the outdoor fan has stopped' if status.get('outdoor_fan_rpm') == 0 else ''}."
+              f"{times} Want me to find a technician?")
+    _send_family(f":rotating_light: {a['name']} reported error {code} ({detail}). HomePilot is on it.")
+    db.log("iot", f"{a['name']} reported {code}", detail)
+    if ins:
+        db.log("insight", f"Repeat fault: {ins['code']} x{ins['previous']}", ins.get("summary", ""))
+    return {"status": "fault", "code": code, "spoken": spoken, "device": all_dev[a["id"]]}
+
+
+def _nth(n: int) -> str:
+    return {2: "second", 3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
+
+
+def get_device_status(appliance: str = "") -> dict:
+    """Live readings from the family's connected appliances (smart AC, washing machine)."""
+    all_dev = devices()
+    if appliance:
+        a = _appliance(appliance)
+        if a:
+            db.log("iot", f"Read live status: {a['name']}", "")
+            return {"appliance": a["name"], "live": all_dev[a["id"]]}
+    db.log("iot", "Read smart-home status", f"{len(all_dev)} devices")
+    names = {x["id"]: x["name"] for x in db.q("SELECT id, name FROM appliances")}
+    return {"devices": {names.get(k, k): v for k, v in all_dev.items()}}
+
+
 def _send_family(message: str, urgent: bool = False) -> str:
     prefix = ":rotating_light: URGENT " if urgent else ":house: "
     delivered = integrations.send_slack(prefix + message, _household().get("family_channel",
@@ -1143,6 +1213,10 @@ TOOLS = {
     "remember_fact": (remember_fact, _s(
         "Save something the user explicitly asks you to remember (a birthday, a preference, a "
         "phone number). Saved facts appear in LIVE CONTEXT.", {"fact": STR}, ["fact"])),
+    "get_device_status": (get_device_status, _s(
+        "Live sensor readings from connected appliances (smart AC: temperature, fan speed, "
+        "error code; washing machine). Use before asking the user to describe a fault.",
+        {"appliance": STR})),
     "cancel_event": (cancel_event, _s(
         "Remove an event from the family calendar.", {"title": STR, "when": STR}, ["title"])),
     "calendar_on_phone": (calendar_on_phone, _s(

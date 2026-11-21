@@ -200,10 +200,21 @@ $("reset").onclick = async () => {
   textHistory.length = 0; await api("/api/reset", { method: "POST" }); refresh();
 };
 
+// ------------------------------------------------------------------ smart home simulator
+// Plays the AC's own sensor report (what a real smart AC / Home Assistant webhook would send).
+$("iot-fault").onclick = async () => {
+  const r = await api("/api/iot/event", { method: "POST", body: JSON.stringify({ device: "AC-LIVING",
+    status: { error: "E4", outdoor_fan_rpm: 0, room_temp_c: 29.5 } }) }).catch(() => null);
+  await refresh();
+  if (r && r.spoken && !live && "speechSynthesis" in window) {
+    speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(r.spoken); u.lang = "en-IN"; speechSynthesis.speak(u);
+  }
+};
+
 // ------------------------------------------------------------------ demo mode
 // Plays the full story through the real tools, one step at a time, and reads each reply
 // aloud with the browser voice. Works without the LLM or a voice call. Click again to stop.
-let demoOn = false;
+let demoOn = false, demoTotal = 12;
 function speakAndWait(text) {
   return new Promise((done) => {
     if (!("speechSynthesis" in window)) return setTimeout(done, 1500 + text.length * 45);
@@ -224,10 +235,11 @@ $("demo-run").onclick = async () => {
   demoOn = true; btn.classList.add("on");
   await api("/api/reset", { method: "POST" }); await refresh();
   for (let n = 0; demoOn; n++) {
-    btn.textContent = `\u25A0 Stop demo (${n + 1}/11)`;
+    btn.textContent = `\u25A0 Stop demo (${n + 1}/${demoTotal})`;
     setStatus("Demo mode", "Playing the family story");
     const r = await api("/api/demo/step", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step: n }) }).catch(() => null);
     if (!r || r.reply === undefined) break;
+    demoTotal = r.total || demoTotal;
     await refresh();
     await pause(900);                 // let the viewer read what Anika "said"
     if (!demoOn) break;
@@ -343,6 +355,17 @@ function render(s) {
     $("invite-who").innerHTML = invs.map((i) =>
       `<li class="${i.joined ? "joined" : ""}">${i.joined ? "✓" : "…"} <b>${esc(i.who)}</b> ${i.joined ? "joined" : "waiting to join"}${i.guest ? ' <span class="muted">(guest)</span>' : ""}</li>`).join("");
   } else card.classList.add("hidden");
+
+  // Smart home: live readings from the connected appliances.
+  const dv = s.devices || {}, label = { "AC-LIVING": "Living room AC", "WM-01": "Washing machine" };
+  $("devices").innerHTML = Object.entries(dv).map(([id, d]) => {
+    const bits = id === "AC-LIVING"
+      ? [`${d.power === "on" ? d.mode : "off"}`, `set ${d.set_temp_c}°C`, `room ${d.room_temp_c}°C`, `fan ${d.outdoor_fan_rpm} rpm`]
+      : [d.power === "on" ? d.cycle : "idle"];
+    return `<div class="dev ${d.error ? "fault" : ""}"><span class="dot"></span><b>${esc(label[id] || id)}</b>
+      <span class="muted">${esc(bits.join(" · "))}</span>${d.error ? `<span class="pill err">error ${esc(d.error)}</span>` : '<span class="pill ok">ok</span>'}</div>`;
+  }).join("");
+  $("iot-fault").disabled = !!(dv["AC-LIVING"] || {}).error;
 
   // "Put it on my phone": QR to the phone calendar page (shown by voice or the QR button).
   const cq = $("calqr");

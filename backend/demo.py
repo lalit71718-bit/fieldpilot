@@ -18,14 +18,21 @@ def _today() -> tuple[str, list]:
             f"open, and Dadi's BP tablet is at 8 PM."), []
 
 
+def _iot_fault() -> tuple[str, list]:
+    r = tools.iot_event("AC-LIVING", {"error": "E4", "outdoor_fan_rpm": 0, "room_temp_c": 29.5})
+    return r.get("spoken", "The AC reported a fault."), []
+
+
 def _ac_issue() -> tuple[str, list]:
+    tools.call("get_device_status", {"appliance": "living room AC"})
     a = tools.call("get_appliance", {"appliance": "living room AC"})
     tools.call("search_manual", {"query": "E4 outdoor fan not spinning warm air"})
     ins = a.get("insight") or {}
-    rep = (f"That's the third E4 in {ins.get('first_seen_days_ago', 'a few')} days, so it's a "
+    rep = (f"That's the {tools._nth(ins.get('previous', 2) + 1)} E4 in {ins.get('first_seen_days_ago', 'a few')} days, so it's a "
            f"repeat fault, likely {ins.get('likely_root_cause', 'the outdoor fan motor')}. "
            if ins else "")
-    return rep + "Safe check from the manual: switch it off at the breaker for 5 minutes, then restart.", []
+    return ("The sensors show the outdoor fan at 0 rpm and the room at 29.5 degrees. " + rep +
+            "Safe check from the manual: switch it off at the breaker for 5 minutes, then restart."), []
 
 
 def _find_slot() -> tuple[str, list]:
@@ -101,7 +108,8 @@ def _wrap() -> tuple[str, list]:
 
 STEPS = [
     ("What's on today?", _today),
-    ("The living room AC is showing E four again and blowing warm air.", _ac_issue),
+    ("", _iot_fault),   # nobody speaks: the AC reports the fault by itself
+    ("What's wrong with it?", _ac_issue),
     ("The outdoor fan isn't spinning. Can you get someone to fix it?", _find_slot),
     ("Yes, book it.", _confirm),
     ("Add milk, paneer and Dadi's BP tablets to the list, and ask Rohan to pick them up.", _shopping),
@@ -118,8 +126,9 @@ def run_step(n: int) -> dict:
     if not 0 <= n < len(STEPS):
         return {"done": True, "total": len(STEPS)}
     said, fn = STEPS[n]
-    db.remember("last_user_text", said)   # the tools' "did the user say a time / yes" guards
-    db.log("user", "Demo", said)
+    if said:
+        db.remember("last_user_text", said)   # the tools' "did the user say a time / yes" guards
+        db.log("user", "Demo", said)
     try:
         reply, _ = fn()
     except Exception as e:  # keep the demo moving

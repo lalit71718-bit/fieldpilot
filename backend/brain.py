@@ -62,6 +62,9 @@ ACTIONS
   details, and never say it is paid until store_order_status says so.
 - "Dadi took her tablet" / "done": reminder_done. "How much did we spend?": spending_summary
   (quote its numbers only).
+- SMART HOME: the AC and washing machine are connected. get_device_status reads live
+  temperature, fan speed and error code; use it instead of asking the user to read the
+  display. Devices also report faults by themselves and you announce them.
 - GOOGLE CALENDAR / PHONE: HomePilot's calendar DOES sync to phones. If the user mentions
   Google Calendar, their phone, a QR code, or "what if this device is off": call
   calendar_on_phone (shows a QR code; they scan it and tap Add / Subscribe; then events and
@@ -338,6 +341,7 @@ FILLERS = {
     "reminder_done": "Great, noting that.",
     "calendar_on_phone": "Putting a QR code on the screen.",
     "cancel_event": "Removing it.",
+    "get_device_status": "Checking the AC's sensors.",
     "spending_summary": "Adding it up.",
     "remember_fact": "I'll remember that.",
     "cancel_reminder": "Cancelling that.",

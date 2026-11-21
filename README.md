@@ -41,9 +41,10 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
 | **Real calendar sync** | Say “put it on my phone” (or tap **QR for phone**): a QR code opens `/cal.html` on the phone, where one tap adds each alarm or event to Google Calendar / the phone calendar, so it rings **even if the HomePilot screen is off**. Changing a time (“make it 6 instead of 7”) moves the event, never duplicates it. The family calendar is also a live **iCalendar feed** at `/calendar.ics`. On the dashboard, **+ Google Calendar** / **Phone calendar** subscribes once, and every booking, delivery and reminder HomePilot creates appears in the family's real phone calendar (with alerts). Each event also has a one-tap “add to Google Calendar” link, and booking confirmations on Slack include it |
 | **Missed-medicine alert** | If nobody presses **Got it** (or says “Dadi took her tablet”, `reminder_done`) within **5 minutes**, HomePilot escalates: “⚠️ Dadi hasn't confirmed the 8 PM reminder: take her BP tablet. Can someone check on Dadi?” goes to the family channel and is spoken in the live call |
 | **Family spending summary** | “How much did we spend this week?” → `spending_summary` adds up technician bookings, grocery deliveries and **paid** store orders, with a breakdown by category and a warning against the monthly budget and the 1,500-rupee repair limit. “Spent this week” is a live KPI on the dashboard |
+| **IoT / Physical AI (optional)** | The AC and washing machine are connected (simulated in the demo). A device posts its status to `/api/iot/event` (the same JSON a smart AC or Home Assistant webhook would send). A new error code makes HomePilot **speak up first**: “Heads up: the living room AC just reported error E4 by itself and the outdoor fan has stopped. It's the third time in 64 days. Want me to find a technician?” It's logged to the service history and posted to the family. `get_device_status` lets the agent read live temperature and fan speed instead of asking. Try **Simulate AC fault** on the dashboard |
 | **Agora Conversational AI + RTC** | Agora agent in an RTC channel (speech-to-text, turn-taking, barge-in) calls our brain as a custom LLM. `call_family_member` brings **another family member into the same live call** from their phone |
 | **Murf Falcon TTS** | Every reply spoken by Murf Falcon; a short filler covers tool calls so there is no dead air |
-| **Tool calling, memory, external APIs** | 29 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
+| **Tool calling, memory, external APIs** | 30 tools (also served over **MCP**), live context per turn, Slack webhook as the family channel |
 
 ## Safety and reliability
 - **Human in the loop:** paid bookings and urgent alerts wait for an explicit "yes". **"No" is enforced in code**: if the last words were a refusal, the action is cancelled even if the model approves.
@@ -66,7 +67,7 @@ Hosted on Render's free plan: the first visit after a quiet period takes about 5
    ├─ brain.py       tool-calling loop, streamed replies, failover, speech cleanup
    ├─ memory         family, preferences, active issue, pending approvals (every turn)
    ├─ rag.py         search over appliance owner's manuals
-   ├─ tools.py       29 household tools + confirmation gate + "no means no" guard
+   ├─ tools.py       30 household tools + confirmation gate + "no means no" guard
    └─ mcp_server.py  the same tools over MCP
         │
         ▼ reply text → Murf Falcon TTS (via Agora) → spoken answer
@@ -134,8 +135,8 @@ Health check: `/api/diag`. See [DEMO_DAY.md](DEMO_DAY.md) before presenting.
 
 ## MCP and tests
 ```bash
-mcp dev backend/mcp_server.py      # inspect the 29 household tools in MCP Inspector
-pytest -q                          # 43 tests, no keys needed (the LLM is faked)
+mcp dev backend/mcp_server.py      # inspect the 30 household tools in MCP Inspector
+pytest -q                          # 44 tests, no keys needed (the LLM is faked)
 ```
 
 ## Project layout
@@ -168,5 +169,5 @@ HomePilot never sees a PIN or bank details (see NPCI’s UPI Reserve Pay for age
 ## What's next
 - Real integrations: two-way Google Calendar, WhatsApp, a grocery delivery API, Urban Company-style service booking.
 - Hindi and Kannada voices for grandparents (`AGORA_ASR_LANGUAGE`, a Murf multilingual voice).
-- Smart-home (IoT) hooks: read the AC's error code directly instead of asking.
+- Real device integrations (Home Assistant, Tuya, Matter) for the IoT webhook.
 - Proactive phone calls: HomePilot rings Dadi's phone at 8 PM for her medicine.

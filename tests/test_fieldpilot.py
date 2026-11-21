@@ -639,4 +639,20 @@ def test_demo_mode_runs_the_whole_story_without_the_llm(monkeypatch):
     print("\n".join(replies))
     st = c.get("/api/state").json()
     assert st["bookings"] and st["store_orders"] and st["reminders"] and st["cal_qr"]
-    assert "Booked, BK-" in replies[3] and "placed" in replies[7] and r["done"]
+    assert "Booked, BK-" in replies[4] and "placed" in replies[8] and r["done"]
+
+
+def test_smart_ac_reports_its_own_fault(monkeypatch):
+    sent = []
+    monkeypatch.setattr(tools, "_send_family", lambda m, urgent=False: sent.append(m) or "sent")
+    c = TestClient(app)
+    assert c.get("/api/state").json()["devices"]["AC-LIVING"]["error"] is None
+    r = c.post("/api/iot/event", json={"device": "AC-LIVING", "status": {"error": "E4", "outdoor_fan_rpm": 0}}).json()
+    assert r["status"] == "fault" and "reported error E4" in r["spoken"] and "E4" in sent[-1]
+    st = c.get("/api/state").json()
+    assert st["devices"]["AC-LIVING"]["error"] == "E4" and st["insight"]["code"] == "E4"
+    assert st["appliance"]["id"] == "AC-LIVING"
+    again = c.post("/api/iot/event", json={"device": "AC-LIVING", "status": {"error": "E4"}}).json()
+    assert again["status"] == "updated" and len(sent) == 1        # no repeat alert
+    live = tools.call("get_device_status", {"appliance": "living room AC"})
+    assert live["live"]["outdoor_fan_rpm"] == 0

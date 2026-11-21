@@ -229,3 +229,18 @@ tr.new-row td{color:var(--accent)}
 @media (max-width:600px){.calqr-card{grid-template-columns:1fr}}
 #notifications, #notifications *{overflow-wrap:anywhere;min-width:0}
 .card{min-width:0}
+
+.iot{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.iot h3 small{font-size:10px;letter-spacing:.04em;text-transform:none;margin-left:6px}
+.iot-btn{font:inherit;font-size:12px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer}
+.iot-btn:disabled{opacity:.45;cursor:default}
+.devices{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.dev{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.dev .dot{width:8px;height:8px;border-radius:50%;background:#2f8f5b;box-shadow:0 0 0 3px rgba(47,143,91,.15)}
+.dev.fault .dot{background:#d64b2a;box-shadow:0 0 0 3px rgba(214,75,42,.18);animation:pulse 1.2s infinite}
+.dev .pill{margin-left:auto}
+.pill.err{background:#fbe3dc;color:#a83a1e}
+.pill.ok{background:#e1f1e7;color:#24704a}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dev.fault .dot{animation:none}}
+.tag.k-iot{color:#d64b2a}
